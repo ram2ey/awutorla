@@ -1,214 +1,128 @@
-import React, { useEffect, useState } from 'react';
-import { Loader2, Package, Users, TrendingUp, Wallet, Sparkles } from 'lucide-react';
-import { fetchAllOrders } from '../lib/orders';
-import {
-  computeOrdersByStatus,
-  computeTailorLoads,
-  computeRevenueThisMonth,
-  computeOutstandingBalance,
-  fetchNewClientsThisMonth,
-} from '../lib/analytics';
-import type { OrderStatusCount, TailorLoad } from '../lib/analytics';
+import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
+import { Package, Users, TrendingUp, Wallet } from 'lucide-react';
+import { fetchOrder, subscribeToOrderChanges } from '../lib/orders';
+import { fetchOrderPage, fetchReceiptPage, fetchWorkshopSummary } from '../lib/reports';
+import type { WorkshopSummary } from '../lib/reports';
+import { PageControls } from '../components/ui/PageControls';
+import { ghanaTime } from '../lib/workshopOperations';
+import type { OrderView } from '../lib/analytics';
+import type { BespokeJobOrder } from '../types/workshop.types';
+import { formatGhs, orderBalance } from '../lib/money';
 import { useAuth } from '../lib/auth';
+import { DigitalJobCard } from '../components/workshop/DigitalJobCard';
+import { OrderSmsHistory } from '../components/workshop/OrderSmsHistory';
 import { ProgressBadge } from '../components/ui/ProgressBadge';
 
-interface StatTileProps {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  badge?: string;
+function StatTile({ icon, label, value, badge }: { icon: ReactNode; label: string; value: string; badge?: string }) {
+  return <div className="glass p-5 rounded-2xl flex items-center gap-4 shadow-sm">
+    <div className="w-11 h-11 rounded-xl bg-mustard-50 text-charcoal-800 flex items-center justify-center shrink-0">{icon}</div>
+    <div className="min-w-0"><p className="text-xs text-gray-500 uppercase">{label}</p>
+      <p className="text-xl font-bold text-charcoal-950 font-display mt-1 break-words">{value}</p>
+      {badge && <p className="text-[11px] text-gray-500 mt-1">{badge}</p>}</div>
+  </div>;
 }
-
-const StatTile: React.FC<StatTileProps> = ({ icon, label, value, badge }) => (
-  <div className="glass p-5 sm:p-6 rounded-2xl flex items-center gap-4 hover:shadow-luxury transition-all duration-200 group">
-    <div className="w-12 h-12 rounded-xl bg-mustard-50 text-charcoal-800 flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform">
-      {icon}
-    </div>
-    <div className="min-w-0 flex-1">
-      <div className="flex items-center justify-between gap-1">
-        <span className="text-xs text-gray-500 font-medium tracking-wide uppercase">{label}</span>
-        {badge && (
-          <span className="text-[10px] font-semibold text-mustard-800 bg-mustard-50 px-2 py-0.5 rounded-full border border-mustard-500/20">
-            {badge}
-          </span>
-        )}
-      </div>
-      <div className="text-2xl font-bold text-charcoal-950 font-display tracking-tight mt-0.5">{value}</div>
-    </div>
-  </div>
-);
-
-interface RankedBarListProps {
-  title: string;
-  rows: { label: string; count: number }[];
-  variant?: 'mustard' | 'charcoal';
-}
-
-// Flat single-hue horizontal bar list — mustard or charcoal fill
-const RankedBarList: React.FC<RankedBarListProps> = ({ title, rows, variant = 'mustard' }) => {
-  const max = Math.max(1, ...rows.map((r) => r.count));
-  const barFill = variant === 'charcoal' ? 'bg-charcoal-950' : 'bg-mustard-400';
-  return (
-    <div className="glass p-6 sm:p-7 rounded-3xl space-y-5 border border-gray-200/60 shadow-sm">
-      <div className="flex items-center justify-between">
-        <h3 className="text-base font-semibold text-charcoal-950 font-display tracking-wide">{title}</h3>
-        <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">{rows.length} Categories</span>
-      </div>
-
-      {rows.length === 0 ? (
-        <div className="py-8 text-center text-sm text-gray-400">No active records recorded yet.</div>
-      ) : (
-        <div className="space-y-4">
-          {rows.map((row) => {
-            const percentage = Math.round((row.count / max) * 100);
-            return (
-              <div key={row.label} className="group">
-                <div className="flex justify-between items-center mb-1.5 text-xs">
-                  <span className="font-medium text-gray-700 capitalize group-hover:text-charcoal-900 transition-colors">
-                    {row.label}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-charcoal-950 font-mono text-xs">{row.count}</span>
-                    <span className="text-[10px] text-gray-400">({percentage}%)</span>
-                  </div>
-                </div>
-                <div className="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden p-0.5 border border-gray-200/50">
-                  <div
-                    className={`h-full rounded-full transition-all duration-500 ${barFill}`}
-                    style={{ width: `${percentage}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-};
-
-export const StaffDashboard: React.FC = () => {
+const VIEWS: { id: OrderView; label: string }[] = [
+  { id: 'active', label: 'Active orders' }, { id: 'overdue', label: 'Overdue' },
+  { id: 'unpaid', label: 'Unpaid balances' }, { id: 'delivered_unpaid', label: 'Delivered / unpaid' }, { id: 'credit', label: 'Customer credits' },
+];
+export function StaffDashboard() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
-
-  const [isLoading, setIsLoading] = useState(true);
-  const [statusCounts, setStatusCounts] = useState<OrderStatusCount[]>([]);
-  const [tailorLoads, setTailorLoads] = useState<TailorLoad[]>([]);
-  const [activeOrders, setActiveOrders] = useState(0);
-  const [revenueThisMonth, setRevenueThisMonth] = useState(0);
-  const [outstandingBalance, setOutstandingBalance] = useState(0);
-  const [newClients, setNewClients] = useState(0);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function load() {
-      setIsLoading(true);
-      try {
-        const [orders, clientsThisMonth] = await Promise.all([fetchAllOrders(), fetchNewClientsThisMonth()]);
-        if (!isMounted) return;
-
-        // Tailors see their own pipeline/task load; admins see the whole atelier.
-        const scopedOrders = isAdmin
-          ? orders
-          : orders.filter((o) => o.assignedTailor === profile?.full_name);
-
-        setStatusCounts(computeOrdersByStatus(scopedOrders));
-        setTailorLoads(isAdmin ? computeTailorLoads(orders) : []);
-        setActiveOrders(scopedOrders.filter((o) => o.stage !== 'delivered').length);
-        setRevenueThisMonth(computeRevenueThisMonth(orders));
-        setOutstandingBalance(computeOutstandingBalance(orders));
-        setNewClients(clientsThisMonth);
-      } catch (err) {
-        console.error('[StaffDashboard] Failed to load analytics:', err);
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      isMounted = false;
-    };
-  }, [isAdmin, profile?.full_name]);
-
-  if (isLoading) {
-    return (
-      <div className="p-16 flex flex-col justify-center items-center gap-3 text-gray-500 text-sm">
-        <Loader2 size={22} className="animate-spin text-accent-700" />
-        <span className="font-medium">Loading atelier dashboard...</span>
-      </div>
-    );
-  }
-
-  const statusTotal = statusCounts.reduce((sum, s) => sum + s.count, 0);
-
-  return (
-    <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in duration-300">
-      {/* Overview Title Banner */}
-      <div className="text-center space-y-2 max-w-xl mx-auto">
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold text-charcoal-800 bg-mustard-50 border border-mustard-200 shadow-sm">
-          <Sparkles size={13} className="text-mustard-600" />
-          <span>Atelier Overview</span>
-        </div>
-        <h2 className="text-3xl sm:text-4xl text-charcoal-950 font-display font-semibold tracking-tight">Dashboard</h2>
-        <p className="text-xs sm:text-sm text-gray-500 font-sans">
-          {isAdmin ? 'Atelier-wide real-time performance & production analytics.' : 'Your assigned bespoke orders and active workload.'}
-        </p>
-      </div>
-
-      {/* Stage Progress Row */}
-      {statusTotal > 0 && (
-        <div className="glass rounded-2xl p-5 sm:p-6 flex flex-wrap justify-center gap-6">
-          {statusCounts.map((s, i) => (
-            <ProgressBadge
-              key={s.label}
-              label={s.label}
-              percentage={(s.count / statusTotal) * 100}
-              variant={i % 2 === 0 ? 'mustard' : 'charcoal'}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* KPI Tiles */}
-      <div className={`grid grid-cols-1 sm:grid-cols-2 ${isAdmin ? 'lg:grid-cols-4' : 'lg:grid-cols-2'} gap-4`}>
-        <StatTile icon={<Package size={20} />} label="Active Orders" value={String(activeOrders)} />
-        {isAdmin && <StatTile icon={<Users size={20} />} label="New Clients" value={String(newClients)} badge="This Month" />}
-        {isAdmin && (
-          <StatTile
-            icon={<TrendingUp size={20} />}
-            label="Revenue"
-            value={`GHS ${revenueThisMonth.toLocaleString()}`}
-            badge="This Month"
-          />
-        )}
-        {isAdmin && (
-          <StatTile
-            icon={<Wallet size={20} />}
-            label="Outstanding"
-            value={`GHS ${outstandingBalance.toLocaleString()}`}
-          />
-        )}
-      </div>
-
-      {/* Analytics Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <RankedBarList
-          title={isAdmin ? 'Orders by Stage' : 'Your Orders by Stage'}
-          rows={statusCounts.map((s) => ({ label: s.label, count: s.count }))}
-          variant="mustard"
-        />
-        {isAdmin && (
-          <RankedBarList
-            title="Tailor Workload (Active Orders)"
-            rows={tailorLoads.map((t) => ({ label: t.tailorName, count: t.activeOrders }))}
-            variant="charcoal"
-          />
-        )}
-      </div>
+  const [orders, setOrders] = useState<BespokeJobOrder[]>([]);
+  const [summary,setSummary]=useState<WorkshopSummary|null>(null);
+  const [search,setSearch]=useState(''); const [searchTerm,setSearchTerm]=useState('');
+  const [page,setPage]=useState(0); const [receiptPage,setReceiptPage]=useState(0);
+  const [orderTotal,setOrderTotal]=useState(0); const [receiptTotal,setReceiptTotal]=useState(0);
+  const [receipts,setReceipts]=useState<Awaited<ReturnType<typeof fetchReceiptPage>>['records']>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
+  const [view, setView] = useState<OrderView>('active');
+  const [selected,setSelected]=useState<BespokeJobOrder|null>(null);
+  const selectedId=selected?.id;
+  useEffect(()=>{const timer=setTimeout(()=>{setSearchTerm(search);setPage(0);},250);return()=>clearTimeout(timer);},[search]);
+  useEffect(()=>subscribeToOrderChanges(()=>setRefresh(v=>v+1)),[]);
+  useEffect(()=>{const refreshOnFocus=()=>setRefresh(v=>v+1);window.addEventListener('focus',refreshOnFocus);window.addEventListener('online',refreshOnFocus);
+    return()=>{window.removeEventListener('focus',refreshOnFocus);window.removeEventListener('online',refreshOnFocus);};},[]);
+  useEffect(()=>{let active=true;setLoading(true);
+    Promise.all([fetchWorkshopSummary(),fetchOrderPage(view,searchTerm,page),isAdmin ? fetchReceiptPage(receiptPage) : Promise.resolve({records:[],total:0})])
+      .then(([stats,result,ledger])=>{if(!active)return;setSummary(stats);setOrders(result.orders);setOrderTotal(result.total);setReceipts(ledger.records);setReceiptTotal(ledger.total);setError(null);
+        if(page>0 && page*25>=result.total)setPage(Math.max(0,Math.ceil(result.total/25)-1));
+        if(receiptPage>0 && receiptPage*25>=ledger.total)setReceiptPage(Math.max(0,Math.ceil(ledger.total/25)-1));})
+      .catch(err=>{if(active)setError(err instanceof Error ? err.message : 'Could not load workshop records.');})
+      .finally(()=>{if(active)setLoading(false);});return()=>{active=false;};
+  },[refresh,view,searchTerm,page,receiptPage,isAdmin]);
+  useEffect(()=>{if(!selectedId)return;let active=true;
+    fetchOrder(selectedId).then(fresh=>{if(active)setSelected(fresh);}).catch(()=>{if(active)setError('Could not refresh the open order. Reload it before recording changes.');});
+    return()=>{active=false;};
+  },[refresh,selectedId]);
+  async function openOrder(id:string) {try{setSelected(await fetchOrder(id));}catch(err){setError(err instanceof Error ? err.message : 'Could not load the order.');}}
+  const stages=['pending','cutting','fitting','finishing','ready','delivered'] as const;
+  const stageLabels=['Received','Cutting','Fitting','Finishing','Ready','Delivered'];
+  const counts=stages.map((stage,index)=>({stage,label:stageLabels[index],count:summary?.statuses[stage] || 0}));
+  const total=counts.reduce((sum,item)=>sum+item.count,0);
+  const visible=orders;
+  if (loading && !summary) return <p className="p-16 text-center text-sm text-gray-500">Loading atelier dashboard…</p>;
+  return <div className="max-w-6xl mx-auto space-y-8">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div><h2 className="text-3xl font-display font-semibold text-charcoal-950">Workshop dashboard</h2>
+        <p className="text-sm text-gray-500 mt-2">{isAdmin ? 'Production, receipts and customer balances across the atelier.' : 'Your assigned orders and the atelier SMS queue.'}</p></div>
+      <button onClick={() => setRefresh((value) => value + 1)} className="rounded-xl px-4 py-2 bg-white border text-xs font-semibold">Refresh workshop</button>
     </div>
-  );
-};
-
+    {error && <p role="alert" className="rounded-xl bg-rose-50 p-4 text-sm text-rose-700">Could not refresh workshop records. Displayed records may be out of date. {error}</p>}
+    <div className={`grid grid-cols-1 sm:grid-cols-2 ${isAdmin ? 'lg:grid-cols-4' : ''} gap-4`}>
+      <StatTile icon={<Package size={20} />} label="Active orders" value={String(summary?.views.active || 0)} />
+      {isAdmin && <>
+        <StatTile icon={<Users size={20} />} label="New customers" value={String(summary?.newCustomers || 0)} badge="This month" />
+        <StatTile icon={<TrendingUp size={20} />} label="Net receipts" value={formatGhs(Number(summary?.receipts || 0))} badge="This month · receipt dates" />
+        <StatTile icon={<Wallet size={20} />} label="Outstanding" value={formatGhs(Number(summary?.outstanding || 0))} badge="Includes delivered / unpaid" />
+      </>}
+    </div>
+    {total > 0 && <div className="glass rounded-2xl p-5 flex flex-wrap justify-center gap-5">{counts.map((item, index) =>
+      <ProgressBadge key={item.stage} label={item.label} percentage={item.count / total * 100} variant={index % 2 ? 'charcoal' : 'mustard'} />)}</div>}
+    <section className="glass rounded-2xl p-5 space-y-4 border border-gray-200">
+      <h3 className="text-lg font-semibold font-display">Orders needing attention</h3>
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Order view">{VIEWS.map((item) => <button key={item.id} type="button" aria-pressed={view === item.id}
+        onClick={() => {setView(item.id);setPage(0);}} className={`px-3 py-2 rounded-lg text-xs font-semibold border ${view === item.id ? 'bg-charcoal-950 text-white' : 'bg-white'}`}>
+        {item.label} ({summary?.views[item.id] || 0})</button>)}</div>
+      <label className="text-xs block">Search orders<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Customer, phone, garment or order ID" className="block mt-1 w-full border rounded-lg p-2 text-sm"/></label>
+      {loading && <p className="text-xs text-gray-500">Refreshing records…</p>}
+      {!visible.length ? <p className="text-sm text-gray-500">No orders in this view.</p> : <div className="overflow-x-auto">
+        <table className="w-full text-sm text-left"><thead className="text-xs text-gray-500"><tr>
+          <th scope="col" className="py-3 pr-3">Customer / garment</th><th scope="col" className="py-3 pr-3">Due date</th>
+          <th scope="col" className="py-3 pr-3">Stage</th><th scope="col" className="py-3">Balance / credit</th>
+        </tr></thead><tbody>{visible.map((order) => <tr key={order.id} className="border-t border-gray-200">
+          <td className="py-3 pr-3"><button className="text-left underline decoration-gray-300 font-semibold" onClick={() => void openOrder(order.id)}>{order.clientName}</button>
+            <p className="text-xs text-gray-500 mt-1">{order.garmentTitle}</p></td>
+          <td className="py-3 pr-3 whitespace-nowrap">{order.dueDate || 'Not set'}</td><td className="py-3 pr-3 capitalize">{order.stage}</td>
+          <td className="py-3 whitespace-nowrap">{orderBalance(order).credit ? `${formatGhs(orderBalance(order).credit)} credit` : `${formatGhs(orderBalance(order).due)} due`}</td>
+        </tr>)}</tbody></table>
+      </div>}
+      <PageControls page={page} total={orderTotal} onChange={setPage} label="Orders"/>
+    </section>
+    {!!summary?.fittings?.length && <section className="glass rounded-2xl p-5 space-y-3"><h3 className="text-lg font-semibold font-display">Upcoming fittings</h3><p className="text-xs text-gray-500">Next 10 scheduled appointments · Ghana time</p>{summary.fittings.map(f=><p key={f.id} className="text-sm"><button className="underline" onClick={()=>void openOrder(f.order_id)}>{f.client_name} · {f.garment_title}</button> · {ghanaTime(f.starts_at)} · {f.duration_minutes} minutes</p>)}</section>}
+    <section className="glass rounded-2xl p-5 border border-gray-200"><OrderSmsHistory key={refresh} stage={String(refresh)} /></section>
+    {isAdmin && <section className="glass rounded-2xl p-5 space-y-4 border border-gray-200">
+      <h3 className="font-semibold text-lg font-display">This month's receipt ledger</h3>
+      <p className="text-xs text-gray-500">Net receipts use payment dates in Ghana, including corrections on the original receipt date. Imported opening balances are excluded because their receipt dates are unknown.</p>
+      {!receipts.length ? <p className="text-sm text-gray-500">No dated receipt entries this month.</p> : <div className="overflow-x-auto">
+        <table className="w-full text-sm text-left"><thead className="text-xs text-gray-500"><tr>
+          <th scope="col" className="py-2 pr-3">Date</th><th scope="col" className="py-2 pr-3">Customer</th>
+          <th scope="col" className="py-2 pr-3">Method / entry</th><th scope="col" className="py-2">Amount</th>
+        </tr></thead><tbody>{receipts.map((entry) => <tr key={entry.id} className="border-t border-gray-200">
+          <td className="py-3 pr-3 whitespace-nowrap">{entry.occurredOn}</td><td className="py-3 pr-3"><button onClick={() => void openOrder(entry.orderId)} className="underline">{entry.clientName || entry.orderId}</button></td>
+          <td className="py-3 pr-3 text-xs">{entry.method}{entry.kind === 'reversal' && ' · Correction'}</td><td className="py-3 whitespace-nowrap">{formatGhs(entry.amount)}</td>
+        </tr>)}</tbody></table>
+      </div>}
+      <PageControls page={receiptPage} total={receiptTotal} onChange={setReceiptPage} label="Receipts"/>
+      <p className="text-xs text-gray-500">Imported opening balances: {formatGhs(Number(summary?.opening || 0))} before any corrections.</p>
+    </section>}
+    {isAdmin && <section className="glass rounded-2xl p-5 space-y-3 border border-gray-200"><h3 className="font-semibold text-lg font-display">Tailor workload</h3>
+      {(summary?.loads || []).map((tailor) => <p className="text-sm flex justify-between" key={tailor.assigned_tailor_id || tailor.name}><span>{tailor.name}</span><span>{tailor.active} active · {tailor.delivered} delivered</span></p>)}
+    </section>}
+    <DigitalJobCard order={selected} isOpen={!!selected} onClose={() => setSelected(null)}
+      onOrderUpdated={(updated) => {setSelected(updated);setRefresh(v=>v+1);}} />
+  </div>;
+}
 export default StaffDashboard;

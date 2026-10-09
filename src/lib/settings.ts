@@ -5,7 +5,6 @@ export interface AppSettings {
   contact_phone: string;
   contact_email: string;
   currency: string;
-  whatsapp_delivery_message: string;
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -13,13 +12,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   contact_phone: '',
   contact_email: '',
   currency: 'GHS',
-  whatsapp_delivery_message: "Order #{orderId} has been delivered. Thank you for commissioning {businessName}.",
 };
 
 /**
- * Reads the business/branding settings (shop name, contact info, currency,
- * message templates). Readable by every signed-in user (the shop name and
- * currency are shown throughout the app), writable by admins only.
+ * Reads business settings for signed-in staff; writable by admins only.
  */
 export async function fetchAppSettings(): Promise<AppSettings> {
   const { data, error } = await supabase.from('app_settings').select('key, value');
@@ -31,10 +27,12 @@ export async function fetchAppSettings(): Promise<AppSettings> {
       (settings as any)[row.key] = row.value ?? (settings as any)[row.key];
     }
   }
+  settings.currency = 'GHS';
   return settings;
 }
 
 export async function updateAppSetting(key: keyof AppSettings, value: string): Promise<void> {
+  if (key === 'currency' && value !== 'GHS') throw new Error('Workshop currency is fixed to GHS.');
   const { error } = await (supabase.from('app_settings') as any).upsert(
     { key, value, updated_at: new Date().toISOString() },
     { onConflict: 'key' }

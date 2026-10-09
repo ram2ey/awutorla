@@ -333,12 +333,14 @@ CREATE POLICY "Tailors and admins can update orders"
 -- All tailors/admins see the full shared workshop board, not just their own
 -- assignments — the Kanban view is a shared floor, not a personal to-do list.
 DROP POLICY IF EXISTS "Tailors can view assigned tasks" ON public.order_tasks;
+DROP POLICY IF EXISTS "Tailors and admins can view all tasks" ON public.order_tasks;
 CREATE POLICY "Tailors and admins can view all tasks"
     ON public.order_tasks FOR SELECT
     TO authenticated
     USING (public.is_tailor());
 
 DROP POLICY IF EXISTS "Tailors can update assigned task status" ON public.order_tasks;
+DROP POLICY IF EXISTS "Tailors and admins can update any task" ON public.order_tasks;
 CREATE POLICY "Tailors and admins can update any task"
     ON public.order_tasks FOR UPDATE
     TO authenticated

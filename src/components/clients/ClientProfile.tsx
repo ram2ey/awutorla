@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Phone, Loader2, PackageOpen, MessageCircle, Receipt, Clock, Sparkles, KeyRound, Copy } from 'lucide-react';
+import { ArrowLeft, Phone, Loader2, PackageOpen, Receipt, Clock, Sparkles } from 'lucide-react';
 import type { BespokeJobOrder } from '../../types/workshop.types';
 import { fetchAllOrders, subscribeToOrderChanges } from '../../lib/orders';
-import { createWalkInClient } from '../../lib/auth';
 import { DigitalJobCard } from '../workshop/DigitalJobCard';
-import { DirectSMSModal } from '../workshop/DirectSMSModal';
 import { RecordPaymentModal } from '../workshop/RecordPaymentModal';
 import { MeasurementVaultSync } from '../measurements/MeasurementVaultSync';
 import { ProgressBadge } from '../ui/ProgressBadge';
+import { formatGhs, orderBalance } from '../../lib/money';
 
 interface ClientProfileProps {
   clientId: string;
@@ -23,26 +22,22 @@ interface ClientProfileProps {
 export const ClientProfile: React.FC<ClientProfileProps> = ({ clientId, clientName, clientPhone, onBack }) => {
   const [orders, setOrders] = useState<BespokeJobOrder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error,setError]=useState('');
   const [selectedOrder, setSelectedOrder] = useState<BespokeJobOrder | null>(null);
   const [isJobCardOpen, setIsJobCardOpen] = useState(false);
-  const [smsOrder, setSmsOrder] = useState<BespokeJobOrder | null>(null);
-  const [isDirectSMSOpen, setIsDirectSMSOpen] = useState(false);
   const [paymentOrder, setPaymentOrder] = useState<BespokeJobOrder | null>(null);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [isRegenConfirming, setIsRegenConfirming] = useState(false);
-  const [isRegenerating, setIsRegenerating] = useState(false);
-  const [regenResult, setRegenResult] = useState<{ accessCode: string; smsSent: boolean } | null>(null);
-  const [regenError, setRegenError] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
 
     async function load() {
       try {
-        const all = await fetchAllOrders();
-        if (isMounted) setOrders(all.filter((o) => o.clientId === clientId));
+        const all = await fetchAllOrders(undefined,undefined,clientId);
+        if (isMounted) {setOrders(all);setError('');setSelectedOrder(previous=>previous ? all.find(order=>order.id===previous.id) || previous : null);}
       } catch (err) {
         console.error('[ClientProfile] Failed to load orders:', err);
+        if(isMounted)setError('Could not refresh customer orders. Reload before using these records.');
       } finally {
         if (isMounted) setIsLoading(false);
       }
@@ -62,25 +57,9 @@ export const ClientProfile: React.FC<ClientProfileProps> = ({ clientId, clientNa
     if (paymentOrder?.id === updated.id) setPaymentOrder(updated);
   };
 
-  // Reuses create-walkin-client's existing-account-by-phone branch, which resets the
-  // password to a freshly generated code and texts it — the same path a returning
-  // walk-in client already goes through, just triggered by staff instead of intake.
-  const handleRegenerateCode = async () => {
-    setIsRegenerating(true);
-    setRegenError(null);
-    try {
-      const result = await createWalkInClient(clientName, clientPhone);
-      setRegenResult({ accessCode: result.accessCode, smsSent: result.smsSent });
-      setIsRegenConfirming(false);
-    } catch (err) {
-      setRegenError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsRegenerating(false);
-    }
-  };
-
   return (
     <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in duration-300">
+      {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
       <button
         onClick={onBack}
         className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-white/70 hover:bg-gold-50 border border-gray-200/80 text-xs font-medium text-gray-700 hover:text-accent-900 transition-all shadow-sm"
@@ -111,73 +90,7 @@ export const ClientProfile: React.FC<ClientProfileProps> = ({ clientId, clientNa
           </div>
         </div>
 
-        {/* Access Code Regeneration — the code itself is never stored readably (it's
-            literally the account's Supabase Auth password), so this is the only way
-            to hand a client their login again short of them still having the SMS. */}
-        {clientPhone && (
-          <div className="shrink-0">
-            {regenResult ? (
-              <div className="p-3.5 bg-white/95 rounded-xl border border-mustard-500/40 shadow-sm space-y-1.5 text-right min-w-[200px]">
-                <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block">New Access Code</span>
-                <div className="flex items-center gap-2 justify-end">
-                  <span className="text-lg font-bold tracking-wider text-charcoal-950 font-mono">{regenResult.accessCode}</span>
-                  <button
-                    type="button"
-                    onClick={() => navigator.clipboard?.writeText(regenResult.accessCode)}
-                    title="Copy code"
-                    className="p-1.5 rounded-lg text-gray-400 hover:text-charcoal-900 hover:bg-mustard-50 transition-colors"
-                  >
-                    <Copy size={14} />
-                  </button>
-                </div>
-                <p className="text-[11px] text-gray-500">
-                  {regenResult.smsSent ? 'Sent to their phone via SMS.' : 'SMS not sent — share this with them directly.'}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setRegenResult(null)}
-                  className="text-[11px] text-gray-400 hover:text-gray-700 underline"
-                >
-                  Done
-                </button>
-              </div>
-            ) : isRegenConfirming ? (
-              <div className="p-3.5 bg-rose-50 rounded-xl border border-rose-200 space-y-2 text-right max-w-[220px]">
-                <p className="text-[11px] text-rose-700 leading-relaxed">
-                  This invalidates their current code — they'll need the new one to sign in. Continue?
-                </p>
-                {regenError && <p className="text-[11px] text-rose-700 font-semibold">{regenError}</p>}
-                <div className="flex justify-end gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setIsRegenConfirming(false)}
-                    className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-gray-600 hover:bg-white transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleRegenerateCode}
-                    disabled={isRegenerating}
-                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-charcoal-950 text-white hover:bg-charcoal-800 transition-colors flex items-center gap-1 disabled:opacity-60"
-                  >
-                    {isRegenerating ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
-                    <span>Confirm</span>
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setIsRegenConfirming(true)}
-                className="px-3.5 py-2 text-xs font-medium text-gray-700 hover:text-charcoal-900 hover:bg-mustard-50 rounded-xl border border-gray-200/80 flex items-center gap-1.5 transition-all shadow-sm"
-              >
-                <KeyRound size={14} className="text-mustard-700" />
-                <span>Regenerate Access Code</span>
-              </button>
-            )}
-          </div>
-        )}
+
       </div>
 
       {/* Measurements Section */}
@@ -213,7 +126,7 @@ export const ClientProfile: React.FC<ClientProfileProps> = ({ clientId, clientNa
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {orders.map((order) => {
-              const balance = Math.max(0, order.totalAmount - order.depositPaid);
+              const { due: balance, credit } = orderBalance(order);
               return (
                 <div
                   key={order.id}
@@ -248,28 +161,18 @@ export const ClientProfile: React.FC<ClientProfileProps> = ({ clientId, clientNa
                     <div onClick={(e) => e.stopPropagation()}>
                       <ProgressBadge
                         label="Payment Progress"
-                        percentage={order.totalAmount > 0 ? (order.depositPaid / order.totalAmount) * 100 : 0}
+                        percentage={order.totalAmount > 0 ? Math.min(100, (order.depositPaid / order.totalAmount) * 100) : 0}
                         shape="pill-wide"
                         variant={balance > 0 ? 'charcoal' : 'mustard'}
                       />
                       <p className="text-[11px] text-gray-500 font-mono mt-1.5">
-                        GHS {order.depositPaid.toFixed(0)} / {order.totalAmount.toFixed(0)}
-                        {balance > 0 && <span className="text-rose-600 font-semibold ml-1.5">(Due {balance.toFixed(0)})</span>}
+                        {formatGhs(order.depositPaid)} / {formatGhs(order.totalAmount)}
+                        {balance > 0 && <span className="text-rose-600 font-semibold ml-1.5">(Due {formatGhs(balance)})</span>}
+                        {credit > 0 && <span className="text-amber-800 font-semibold ml-1.5">(Customer credit {formatGhs(credit)})</span>}
                       </p>
                     </div>
 
                     <div className="flex justify-end items-center gap-2">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSmsOrder(order);
-                          setIsDirectSMSOpen(true);
-                        }}
-                        title="Send WhatsApp Concierge Message"
-                        className="p-2 rounded-xl bg-emerald-50 text-emerald-800 hover:bg-emerald-600 hover:text-white border border-emerald-500/20 transition-colors shadow-sm"
-                      >
-                        <MessageCircle size={14} />
-                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -296,7 +199,6 @@ export const ClientProfile: React.FC<ClientProfileProps> = ({ clientId, clientNa
         onClose={() => setIsJobCardOpen(false)}
         onOrderUpdated={handleOrderUpdated}
       />
-      <DirectSMSModal order={smsOrder} isOpen={isDirectSMSOpen} onClose={() => setIsDirectSMSOpen(false)} />
       <RecordPaymentModal
         order={paymentOrder}
         isOpen={isPaymentModalOpen}

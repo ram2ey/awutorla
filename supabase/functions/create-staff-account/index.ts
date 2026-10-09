@@ -5,7 +5,7 @@
 // the service-role key, which must never be shipped to the browser.
 //
 // There is no self-service signup in this app (see AuthScreen — sign-in only). Client
-// accounts come from create-walkin-client; staff accounts come from here, and only an
+// records do not have login accounts; staff accounts come from here, and only an
 // existing admin may call this.
 //
 // On success it:
@@ -26,9 +26,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-// Deliberately not the same alphabet/length as client access codes (ACCESS_CODE_ALPHABET
-// in create-walkin-client) — this is a real password meant to be changed, not a
-// short code read off an SMS, so it uses a larger character set for more entropy.
+// Temporary staff passwords use cryptographically random values.
 const PASSWORD_ALPHABET =
   'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
 
@@ -46,9 +44,7 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-// Supabase Auth requires E.164 (digits only, country code, no leading 0) for the phone
-// field — mirrors create-walkin-client/index.ts's sanitizer, which is why walk-in client
-// accounts already work while staff accounts with a phone were failing before this.
+// Normalize optional staff phones to international Ghanaian format.
 function sanitizeGhanaianPhoneNumber(phoneNumber: string): string {
   let digits = phoneNumber.replace(/\D/g, '');
   if (digits.startsWith('0') && digits.length === 10) {
@@ -122,8 +118,7 @@ Deno.serve(async (req: Request) => {
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       });
     }
-    // Scoped to staff roles only — client accounts must go through create-walkin-client,
-    // which attaches the walk-in intake flow (order, measurements) this endpoint doesn't.
+    // Only an existing admin can create staff accounts.
     if (role !== 'tailor' && role !== 'admin') {
       return new Response(JSON.stringify({ error: 'role must be "tailor" or "admin".' }), {
         status: 400,
@@ -152,7 +147,8 @@ Deno.serve(async (req: Request) => {
       phone: sanitizedPhone,
       email_confirm: true,
       phone_confirm: sanitizedPhone ? true : undefined,
-      user_metadata: { full_name: fullName, role },
+      user_metadata: { full_name: fullName },
+      app_metadata: { role },
     });
 
     if (createError || !created?.user) {

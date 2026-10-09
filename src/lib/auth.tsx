@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from './supabase';
+import { clearOfflineStore, setOfflineStoreOwner } from './offlineStore';
 import type { UserRole } from '../types/database.types';
 
 // supabase-js's functions.invoke() throws a generic FunctionsHttpError ("Edge Function
@@ -39,13 +40,6 @@ export interface AuthProfile {
   role: UserRole;
 }
 
-// Walk-in clients (created via the create-walkin-client Edge Function) sign in with a
-// single access code rather than an email/password. Supabase auth still needs a valid
-// email under the hood, so the code is deterministically mapped to one — this domain
-// must match WALKIN_EMAIL_DOMAIN used by the Edge Function that creates these accounts
-// (supabase/functions/create-walkin-client/index.ts).
-const WALKIN_EMAIL_DOMAIN = 'walkin.clients.internal';
-
 interface AuthContextValue {
   session: Session | null;
   user: User | null;
@@ -56,31 +50,9 @@ interface AuthContextValue {
   // resolves (Supabase treats the reset link as a real, though narrowly-scoped, session).
   isPasswordRecovery: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
-  signInWithClientCode: (code: string) => Promise<{ error: string | null }>;
   sendPasswordReset: (email: string) => Promise<{ error: string | null }>;
   updatePassword: (newPassword: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
-}
-
-export interface WalkInClientResult {
-  clientId: string;
-  accessCode: string;
-  isNewAccount: boolean;
-  smsSent: boolean;
-}
-
-/**
- * Registers (or recognizes a returning) walk-in client via the create-walkin-client
- * Edge Function. Must be called by a signed-in tailor/admin — the function itself
- * re-checks this server-side. Throws on failure.
- */
-export async function createWalkInClient(fullName: string, phone: string): Promise<WalkInClientResult> {
-  const { data, error } = await supabase.functions.invoke('create-walkin-client', {
-    body: { fullName, phone },
-  });
-  if (error) throw new Error(await describeFunctionError(error, 'Failed to register walk-in client.'));
-  if (data?.error) throw new Error(data.error);
-  return data as WalkInClientResult;
 }
 
 export interface StaffAccountResult {
@@ -108,35 +80,22 @@ export async function createStaffAccount(
   return data as StaffAccountResult;
 }
 
-/**
- * Self-service recovery for a walk-in client who lost their SMS access code — no
- * sign-in required. Always resolves to the same generic message regardless of
- * whether the phone number matched anything (the resend-access-code Edge Function
- * never reveals that), so there is nothing meaningful to throw here except a
- * genuine network failure.
- */
-export async function resendAccessCode(phone: string): Promise<string> {
-  const { data, error } = await supabase.functions.invoke('resend-access-code', {
-    body: { phone },
-  });
-  if (error) throw new Error('Could not reach the recovery service. Please try again.');
-  if (data?.error) throw new Error(data.error);
-  return data.message as string;
-}
-
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<AuthProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadedProfileId, setLoadedProfileId] = useState<string | null>(null);
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const userId = session?.user.id ?? null;
 
   useEffect(() => {
     let isMounted = true;
 
     supabase.auth.getSession().then(({ data }) => {
       if (!isMounted) return;
+      setOfflineStoreOwner(data.session?.user.id ?? null);
       setSession(data.session);
       setLoading(false);
     });
@@ -144,6 +103,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: listener } = supabase.auth.onAuthStateChange((event, newSession) => {
       if (!isMounted) return;
       if (event === 'PASSWORD_RECOVERY') setIsPasswordRecovery(true);
+      setOfflineStoreOwner(newSession?.user.id ?? null);
+      if (!newSession) setIsPasswordRecovery(false);
       setSession(newSession);
     });
 
@@ -157,43 +118,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let isMounted = true;
 
     async function loadProfile(userId: string) {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, full_name, phone_number, role')
-        .eq('id', userId)
-        .maybeSingle();
-
-      if (isMounted && !error) {
-        setProfile((data as unknown as AuthProfile) || null);
+      setProfile(null);
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('id, full_name, phone_number, role')
+          .eq('id', userId)
+          .maybeSingle();
+        if (isMounted && !error) setProfile((data as unknown as AuthProfile) || null);
+      } catch {
+        // A failed profile lookup must deny access and finish the loading screen.
+        if (isMounted) setProfile(null);
+      } finally {
+        if (isMounted) setLoadedProfileId(userId);
       }
     }
 
-    if (session?.user) {
-      loadProfile(session.user.id);
+    if (userId) {
+      loadProfile(userId);
     } else {
       setProfile(null);
+      setLoadedProfileId(null);
     }
 
     return () => {
       isMounted = false;
     };
-  }, [session?.user?.id]);
+  }, [userId]);
 
   const signIn: AuthContextValue['signIn'] = async (email, password) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return { error: error?.message || null };
-  };
-
-  const signInWithClientCode: AuthContextValue['signInWithClientCode'] = async (code) => {
-    const normalized = code.trim().toUpperCase();
-    if (!normalized) return { error: 'Enter your access code.' };
-
-    const syntheticEmail = `${normalized.toLowerCase()}@${WALKIN_EMAIL_DOMAIN}`;
-    const { error } = await supabase.auth.signInWithPassword({
-      email: syntheticEmail,
-      password: normalized,
-    });
-    return { error: error ? 'Invalid or expired access code.' : null };
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return { error: error.message };
+    const result = await supabase.from('profiles').select('role').eq('id', data.user.id).maybeSingle();
+    const role = (result.data as { role?: string } | null)?.role;
+    if (result.error || (role !== 'tailor' && role !== 'admin')) {
+      await supabase.auth.signOut();
+      return { error: 'This account does not have staff access.' };
+    }
+    return { error: null };
   };
 
   const sendPasswordReset: AuthContextValue['sendPasswordReset'] = async (email) => {
@@ -211,6 +173,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     setIsPasswordRecovery(false);
+    clearOfflineStore();
     await supabase.auth.signOut();
   };
 
@@ -220,10 +183,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session,
         user: session?.user || null,
         profile,
-        loading,
+        loading: loading || (!!session && loadedProfileId !== session.user.id),
         isPasswordRecovery,
         signIn,
-        signInWithClientCode,
         sendPasswordReset,
         updatePassword,
         signOut,

@@ -100,9 +100,9 @@ export async function runAllSchemaTests() {
   });
 
   // --------------------------------------------------------------------------
-  // TEST GROUP 3: Client Order Tracking & Financial Settlement (orders table)
+  // TEST GROUP 3: Staff Order Search & Financial Settlement (orders table)
   // --------------------------------------------------------------------------
-  console.log('\n--- 3. Client Order Tracker & Financial Calculations ---');
+  console.log('\n--- 3. Staff Order Search & Financial Calculations ---');
 
   await test('Calculates remaining deposit balance for bespoke order', () => {
     const order = SEED_WORKSHOP_ORDERS[0];

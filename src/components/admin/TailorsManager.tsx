@@ -23,7 +23,6 @@ interface ProfileRow {
 }
 
 const ROLE_OPTIONS: { value: UserRole; label: string; icon: React.ReactNode }[] = [
-  { value: 'client', label: 'Client', icon: <User size={13} /> },
   { value: 'tailor', label: 'Artisan Tailor', icon: <Scissors size={13} /> },
   { value: 'admin', label: 'Master Admin', icon: <Shield size={13} /> },
 ];
@@ -57,6 +56,7 @@ export const TailorsManager: React.FC = () => {
       const { data, error } = await supabase
         .from('profiles')
         .select('id, full_name, phone_number, role')
+        .in('role', ['tailor', 'admin'])
         .order('role', { ascending: false });
       if (!isMounted) return;
       if (error) {
@@ -117,6 +117,7 @@ export const TailorsManager: React.FC = () => {
       const { data } = await supabase
         .from('profiles')
         .select('id, full_name, phone_number, role')
+        .in('role', ['tailor', 'admin'])
         .order('role', { ascending: false });
       if (data) setProfiles(data as ProfileRow[]);
     } catch (err: unknown) {

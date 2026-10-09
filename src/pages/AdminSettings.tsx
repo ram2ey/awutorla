@@ -4,10 +4,12 @@ import { TailorsManager } from '../components/admin/TailorsManager';
 import { MeasurementParametersEditor } from '../components/admin/MeasurementParametersEditor';
 import { BusinessSettingsEditor } from '../components/admin/BusinessSettingsEditor';
 import { activeTabClass, inactiveTabClass } from '../components/ui/tabStyles';
+import { AbandonedUploads } from '../components/admin/AbandonedUploads';
 
-type SettingsSection = 'tailors' | 'measurements' | 'business';
+type SettingsSection = 'tailors' | 'measurements' | 'business' | 'uploads';
 
 const SECTIONS: { id: SettingsSection; label: string; icon: React.ReactNode; description: string }[] = [
+  {id:'uploads',label:'Unused Uploads',icon:<Store size={15}/>,description:'Review abandoned intake attachments without removing saved order files.'},
   { id: 'tailors', label: 'Tailors & Team', icon: <Users size={15} />, description: 'Manage staff accounts, artisan credentials, and role privileges.' },
   {
     id: 'measurements',
@@ -61,6 +63,7 @@ export const AdminSettings: React.FC = () => {
           {activeSection === 'tailors' && <TailorsManager />}
           {activeSection === 'measurements' && <MeasurementParametersEditor />}
           {activeSection === 'business' && <BusinessSettingsEditor />}
+          {activeSection === 'uploads' && <AbandonedUploads />}
         </div>
       </div>
     </div>

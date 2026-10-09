@@ -1,24 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   UserPlus,
-  CheckCircle2,
   Phone,
   Loader2,
   AlertCircle,
-  MessageCircle,
   ImagePlus,
   X,
   Calculator,
 } from 'lucide-react';
-import type { BespokeJobOrder, ClientBodyMeasurements, MeasurementParameter } from '../../types/workshop.types';
+import type { BespokeJobOrder, MeasurementParameter } from '../../types/workshop.types';
 import { sanitizeGhanaianPhoneNumber, detectGhanaNetwork } from '../../services/hubtel';
-import { formatWhatsAppWelcomeMessage, openWhatsAppChat } from '../../services/whatsapp';
 import { supabase } from '../../lib/supabase';
 import { saveOfflineJobCard, cacheClientMeasurements } from '../../lib/offlineStore';
 import { fetchMeasurementParameters } from '../../lib/measurementParameters';
 import { uploadOrderSketch } from '../../lib/storage';
-import { createWalkInClient, useAuth } from '../../lib/auth';
+import { useAuth } from '../../lib/auth';
+import { fetchStaffMembers } from '../../lib/clients';
+import type { StaffMember } from '../../lib/clients';
 import { Modal } from '../ui/Modal';
+import { fetchOrder } from '../../lib/orders';
+import { PAYMENT_METHODS } from '../../lib/payments';
+import { todayGhana } from '../../lib/money';
 
 const MAX_SKETCHES = 5;
 
@@ -42,15 +44,21 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
   // Form State
   const [clientName, setClientName] = useState('');
   const [clientPhone, setClientPhone] = useState('024');
-  const [garmentTitle, setGarmentTitle] = useState('Royal Kente Evening Ballgown');
-  const [garmentSubtitle, setGarmentSubtitle] = useState('Custom Bespoke Couture');
-  const [fabricType, setFabricType] = useState('Handwoven Silk Kente');
-  const [fabricColor, setFabricColor] = useState('Royal Gold & Indigo');
-  const [fabricNotes, setFabricNotes] = useState('Double-reinforced boning with gold thread embroidery.');
-  const [totalAmount, setTotalAmount] = useState<number>(3500);
-  const [depositPaid, setDepositPaid] = useState<number>(1750);
-  const [assignedTailor, setAssignedTailor] = useState('Master Kwame Mensah');
-  const [dueDate, setDueDate] = useState('AUG 24, 2026');
+  const [garmentTitle, setGarmentTitle] = useState('');
+  const [garmentSubtitle, setGarmentSubtitle] = useState('');
+  const [fabricType, setFabricType] = useState('');
+  const [fabricColor, setFabricColor] = useState('');
+  const [fabricNotes, setFabricNotes] = useState('');
+  const [totalAmount, setTotalAmount] = useState<number | ''>('');
+  const [depositPaid, setDepositPaid] = useState<number | ''>('');
+  const [assignedTailor, setAssignedTailor] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [paymentMethod, setPaymentMethod] = useState(PAYMENT_METHODS[0]);
+  const [paymentDate, setPaymentDate] = useState(todayGhana());
+  const [paymentReference, setPaymentReference] = useState('');
+  const submission = useRef({ id: '', taskId: '', depositKey: '' });
+  const uploads = useRef(new Map<File, string>());
 
   // Measurements State
   const [unit, setUnit] = useState<'in' | 'cm'>('in');
@@ -71,15 +79,6 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
   // Status State
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [successInfo, setSuccessInfo] = useState<{
-    orderId: string;
-    accessCode: string | null;
-    isNewAccount: boolean;
-    smsSent: boolean;
-    accountError: string | null;
-    sketchUploadWarning: string | null;
-  } | null>(null);
-
   // Reset the entire intake form each time the modal opens, since the parent keeps this
   // component mounted and only toggles `isOpen` — otherwise a second intake would start
   // from the previous client's data or show the previous success screen.
@@ -87,15 +86,18 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
     if (isOpen) {
       setClientName('');
       setClientPhone('024');
-      setGarmentTitle('Royal Kente Evening Ballgown');
-      setGarmentSubtitle('Custom Bespoke Couture');
-      setFabricType('Handwoven Silk Kente');
-      setFabricColor('Royal Gold & Indigo');
-      setFabricNotes('Double-reinforced boning with gold thread embroidery.');
-      setTotalAmount(3500);
-      setDepositPaid(1750);
-      setAssignedTailor('Master Kwame Mensah');
-      setDueDate('AUG 24, 2026');
+      setGarmentTitle('');
+      setGarmentSubtitle('');
+      setFabricType('');
+      setFabricColor('');
+      setFabricNotes('');
+      setTotalAmount('');
+      setDepositPaid('');
+      setAssignedTailor('');
+      setDueDate('');
+      setPaymentMethod(PAYMENT_METHODS[0]); setPaymentDate(todayGhana()); setPaymentReference('');
+      submission.current = { id: `ORD-${crypto.randomUUID()}`, taskId: `tsk-${crypto.randomUUID()}`, depositKey: crypto.randomUUID() };
+      uploads.current = new Map();
       setUnit('in');
       setMeasurementValues({});
       setSketchPreviews((prev) => {
@@ -110,7 +112,10 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
       setCalcMarkupPercent(0);
       setIsSubmitting(false);
       setErrorMessage(null);
-      setSuccessInfo(null);
+      fetchStaffMembers().then((members) => {
+        setStaff(members);
+        setAssignedTailor(members[0]?.id || '');
+      }).catch(() => setErrorMessage('Could not load staff. Reopen intake to try again.'));
 
       fetchMeasurementParameters()
         .then(setMeasurementParameters)
@@ -165,274 +170,61 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
     e.preventDefault();
     setErrorMessage(null);
     setIsSubmitting(true);
-
+    let persisted = false;
     try {
-      if (!user) {
-        throw new Error('You must be signed in as workshop staff to register a client.');
+      if (!user) throw new Error('Staff sign-in required.');
+      if (totalAmount === '' || depositPaid === '' || depositPaid > totalAmount) {
+        throw new Error('Enter a total price and a deposit no greater than the total.');
       }
-      const sanitizedPhone = sanitizeGhanaianPhoneNumber(clientPhone);
-      const generatedOrderId = `ORD-BESPOKE-${Math.floor(100 + Math.random() * 900)}`;
-
-      // 0. Create (or recognize a returning) client account — this is what lets the
-      // client sign in later and see this order. Runs server-side via Edge Function
-      // since it needs the admin key. Non-fatal: if it fails (e.g. offline, function
-      // not deployed), the order still gets created without an attached account.
-      let realClientId: string | null = null;
-      let accessCode: string | null = null;
-      let isNewAccount = false;
-      let smsSent = false;
-      let accountError: string | null = null;
-      try {
-        const account = await createWalkInClient(clientName.trim(), sanitizedPhone);
-        realClientId = account.clientId;
-        accessCode = account.accessCode;
-        isNewAccount = account.isNewAccount;
-        smsSent = account.smsSent;
-      } catch (err) {
-        console.error('[QuickIntakeModal] Walk-in client account creation failed:', err);
-        accountError =
-          'Could not create a client account (order was still saved). You can register them again later to enable sign-in.';
-      }
-
-      const clientId = realClientId || `client-${Date.now().toString().slice(-6)}`;
-
-      // 0b. Upload any reference sketches/photos attached during intake. Non-fatal,
-      // same reasoning as account creation above: a failed upload shouldn't block
-      // saving the order — the tailor can attach images from the order later.
-      let uploadedImageUrls: string[] = [];
-      let sketchUploadWarning: string | null = null;
-      if (sketchFiles.length > 0) {
-        try {
-          uploadedImageUrls = await Promise.all(
-            sketchFiles.map((file) => uploadOrderSketch(generatedOrderId, file))
-          );
-        } catch (err) {
-          console.error('[QuickIntakeModal] Sketch upload failed:', err);
-          sketchUploadWarning =
-            'Order was saved, but the reference images failed to upload — you can add them again from the order later.';
-        }
-      }
-
-      // 1. Build Tailoring Measurement Passport
-      const measurementsPayload: ClientBodyMeasurements = {
-        clientId,
-        clientName: clientName.trim(),
-        clientPhone: sanitizedPhone,
-        unit,
-        values: measurementValues,
-        updatedAt: new Date().toISOString(),
+      const tailor = staff.find((member) => member.id === assignedTailor);
+      if (!tailor) throw new Error('Select an active staff member.');
+      const phone = sanitizeGhanaianPhoneNumber(clientPhone);
+      const { id, taskId, depositKey } = submission.current;
+      const imageUrls = await Promise.all(sketchFiles.map(async (file) => {
+        const saved = uploads.current.get(file); if (saved) return saved;
+        const path = await uploadOrderSketch(id, file); uploads.current.set(file, path); return path;
+      }));
+      const payload = {
+        id, task_id: taskId, client_name: clientName.trim(), client_phone: phone,
+        garment_title: garmentTitle.trim(), garment_subtitle: garmentSubtitle.trim(),
+        fabric_type: fabricType.trim(), fabric_color: fabricColor.trim(), fabric_notes: fabricNotes.trim(),
+        reference_images: imageUrls, swatch_image: imageUrls[0] || null,
+        tailor_id: tailor.id, due_date: dueDate, deposit_paid: depositPaid,
+        total_amount: totalAmount, currency: 'GHS', unit, measurement_values: measurementValues,
+        deposit_submission_key: depositKey, payment_method: paymentMethod, payment_date: paymentDate, payment_reference: paymentReference.trim(),
       };
-
-      const initialTaskId = `tsk-${Date.now().toString().slice(-4)}`;
-      const initialStageHistory = [
-        {
-          stage: 'pending' as const,
-          completedAt: new Date().toISOString(),
-          completedBy: 'Reception',
-          notes: `Intake logged. Initial payment of GHS ${depositPaid} received.`,
-        },
-      ];
-
-      // 2. Build Bespoke Order Entity
-      const newOrder: BespokeJobOrder = {
-        id: generatedOrderId,
-        clientId: realClientId,
-        clientName: clientName.trim(),
-        clientPhone: sanitizedPhone,
-        stage: 'pending',
-        garmentTitle: garmentTitle.trim(),
-        garmentSubtitle: garmentSubtitle.trim(),
-        fabricType: fabricType.trim(),
-        fabricColor: fabricColor.trim(),
-        fabricNotes: fabricNotes.trim(),
-        referenceImages: uploadedImageUrls,
-        swatchImage: uploadedImageUrls[0],
-        measurements: measurementsPayload,
-        depositPaid,
-        totalAmount,
-        assignedTailor,
-        dueDate,
-        createdAt: new Date().toISOString(),
-        tasks: [
-          {
-            id: initialTaskId,
-            orderId: generatedOrderId,
-            tailorName: assignedTailor,
-            title: `Draft master bespoke pattern for ${garmentTitle}`,
-            status: 'pending',
-            assignedAt: new Date().toISOString(),
-          },
-        ],
-        stageHistory: initialStageHistory,
-      };
-
-      // 3. Save to Offline Store
+      const { error } = await (supabase as any).rpc('create_bespoke_intake', { p_payload: payload });
+      if (error) throw new Error(error.message || 'Could not save intake. Please try again.');
+      persisted = true;
+      const newOrder = await fetchOrder(id);
       saveOfflineJobCard(newOrder);
-      cacheClientMeasurements(clientId, measurementsPayload);
-
-      // 4. Commit to Supabase Database (Orders + initial task)
-      try {
-        const { error: insertError } = await (supabase.from('orders') as any).insert({
-          id: generatedOrderId,
-          // Attached to the client's real account when one was just created/found above;
-          // stays null only if that step failed (contact details are still captured in
-          // client_name/client_phone below either way).
-          client_id: realClientId,
-          client_name: clientName.trim(),
-          client_phone: sanitizedPhone,
-          status: 'pending',
-          garment_title: garmentTitle.trim(),
-          garment_subtitle: garmentSubtitle.trim(),
-          fabric_type: fabricType.trim(),
-          fabric_color: fabricColor.trim(),
-          fabric_notes: fabricNotes.trim(),
-          reference_images: newOrder.referenceImages,
-          swatch_image: newOrder.swatchImage,
-          assigned_tailor: assignedTailor,
-          due_date: dueDate,
-          deposit_paid: depositPaid,
-          total_amount: totalAmount,
-          currency: 'GHS',
-          stage_history: initialStageHistory,
-        });
-        if (insertError) console.error('[QuickIntakeModal] Order insert failed:', insertError);
-
-        if (!insertError) {
-          const { error: taskError } = await (supabase.from('order_tasks') as any).insert({
-            id: initialTaskId,
-            order_id: generatedOrderId,
-            tailor_id: user.id,
-            tailor_name: assignedTailor,
-            title: `Draft master bespoke pattern for ${garmentTitle}`,
-            status: 'pending',
-          });
-          if (taskError) console.error('[QuickIntakeModal] Initial task insert failed:', taskError);
-        }
-      } catch (err) {
-        console.error('[QuickIntakeModal] Order insert threw:', err);
-      }
-
-      // 5. Commit measurements to Supabase, now that we have a real client id to attach them to
-      if (realClientId) {
-        try {
-          const { error: headerError } = await (supabase.from('client_measurements') as any).upsert(
-            { client_id: realClientId, unit, updated_at: measurementsPayload.updatedAt },
-            { onConflict: 'client_id' }
-          );
-          if (headerError) console.error('[QuickIntakeModal] Measurements header upsert failed:', headerError);
-
-          const valueRows = measurementParameters
-            .filter((p) => measurementValues[p.key] !== undefined && !Number.isNaN(measurementValues[p.key]))
-            .map((p) => ({
-              client_id: realClientId,
-              parameter_id: p.id,
-              value: measurementValues[p.key],
-              updated_at: measurementsPayload.updatedAt,
-            }));
-          if (valueRows.length > 0) {
-            const { error: valuesError } = await (supabase.from('client_measurement_values') as any).upsert(
-              valueRows,
-              { onConflict: 'client_id,parameter_id' }
-            );
-            if (valuesError) console.error('[QuickIntakeModal] Measurement values upsert failed:', valuesError);
-          }
-        } catch (err) {
-          console.error('[QuickIntakeModal] Measurements upsert threw:', err);
-        }
-      }
-
+      if (newOrder.clientId) cacheClientMeasurements(newOrder.clientId, newOrder.measurements);
       onOrderCreated(newOrder);
-      setSuccessInfo({ orderId: generatedOrderId, accessCode, isNewAccount, smsSent, accountError, sketchUploadWarning });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setErrorMessage(msg);
+    } catch (err) {
+      setErrorMessage(persisted ? 'Intake was saved, but could not be reloaded. Refresh the workshop to view it.' : err instanceof Error ? err.message : 'Could not confirm intake. Refresh the workshop before starting another submission.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const changeUnit = (next: 'in' | 'cm') => {
+    if (next === unit) return;
+    const factor = next === 'cm' ? 2.54 : 1 / 2.54;
+    setMeasurementValues((values) => Object.fromEntries(Object.entries(values)
+      .map(([key, value]) => [key, Number((value * factor).toFixed(2))])));
+    setUnit(next);
+  };
+
   return (
     <Modal
       isOpen={isOpen}
-      onClose={onClose}
-      title="New Bespoke Client Passport"
-      subtitle="Rapid intake — workshop"
+      onClose={() => {if (!isSubmitting) onClose();}}
+      title="New Bespoke Order"
+      subtitle="Staff intake — SMS progress updates"
       icon={<UserPlus size={17} />}
       maxWidth="max-w-4xl"
     >
       <form onSubmit={handleSubmit} className="p-6 sm:p-7 space-y-6">
-        {successInfo ? (
-          <div className="p-8 text-center glass rounded-3xl border border-gold-500/30 space-y-5 animate-in fade-in">
-            <div className="w-16 h-16 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-600 flex items-center justify-center mx-auto shadow-sm">
-              <CheckCircle2 size={34} />
-            </div>
-            <div>
-              <span className="text-[11px] font-semibold text-gold-700 uppercase tracking-widest">Bespoke Registration Complete</span>
-              <h3 className="text-2xl sm:text-3xl font-display font-semibold text-accent-950 mt-1">
-                Order #{successInfo.orderId} Created
-              </h3>
-            </div>
-            <p className="text-xs sm:text-sm text-gray-600 max-w-md mx-auto leading-relaxed font-sans">
-              Client profile, 6-point tailoring passport, and initial workshop task have been saved to the atelier and synchronized with the master database.
-            </p>
-
-            {successInfo.accessCode ? (
-              <div className="mx-auto max-w-sm p-5 bg-white/95 rounded-2xl border border-gold-500/40 shadow-sm space-y-2">
-                <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider block">
-                  {successInfo.isNewAccount ? 'New Client Access Code' : 'Recognized Client Access Code'}
-                </span>
-                <span className="text-3xl tracking-[0.25em] text-accent-950 font-mono font-bold block">
-                  {successInfo.accessCode}
-                </span>
-                <p className="text-xs text-gray-500 leading-relaxed font-sans pt-1">
-                  {successInfo.smsSent
-                    ? 'Delivered to the client via SMS — this code signs them in to track their bespoke order.'
-                    : 'SMS delivery pending — please hand off this code directly or send it via WhatsApp.'}
-                </p>
-              </div>
-            ) : (
-              successInfo.accountError && (
-                <div className="mx-auto max-w-sm p-3.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl text-xs flex items-start gap-2 text-left">
-                  <AlertCircle size={15} className="mt-0.5 shrink-0" />
-                  <span>{successInfo.accountError}</span>
-                </div>
-              )
-            )}
-
-            {successInfo.sketchUploadWarning && (
-              <div className="mx-auto max-w-sm p-3.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl text-xs flex items-start gap-2 text-left">
-                <AlertCircle size={15} className="mt-0.5 shrink-0" />
-                <span>{successInfo.sketchUploadWarning}</span>
-              </div>
-            )}
-
-            <div className="pt-4 flex flex-wrap justify-center gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  const waMsg = formatWhatsAppWelcomeMessage(clientName, successInfo.orderId, garmentTitle, depositPaid, totalAmount);
-                  const withCode = successInfo.accessCode
-                    ? `${waMsg}\n\nYour client access code: ${successInfo.accessCode}`
-                    : waMsg;
-                  openWhatsAppChat(clientPhone, withCode);
-                }}
-                className="px-5 py-2.5 bg-[#25D366] hover:bg-[#1EBE5D] text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-sm flex items-center gap-2"
-              >
-                <MessageCircle size={16} />
-                <span>Send WhatsApp Welcome</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-5 py-2.5 bg-gradient-to-r from-accent-800 to-accent-600 hover:from-accent-700 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-sm"
-              >
-                Done / Close
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
             {/* SECTION 1: CLIENT CONTACT */}
             <div className="p-6 glass rounded-2xl border border-gold-500/20 space-y-4 shadow-sm">
               <span className="text-xs font-semibold text-accent-950 uppercase tracking-widest block">1. Client Dossier</span>
@@ -452,7 +244,7 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
 
                 <div>
                   <div className="flex justify-between items-center mb-1">
-                    <label className={labelClass}>Ghana Phone (WhatsApp) *</label>
+                    <label className={labelClass}>Ghana Phone (SMS) *</label>
                     {detectedNet !== 'unknown' && (
                       <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-300 font-mono">
                         {detectedNet.replace('-gh', '').toUpperCase()}
@@ -481,7 +273,7 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
                 <div className="flex bg-gray-100/90 rounded-xl p-1 text-xs border border-gray-200/60">
                   <button
                     type="button"
-                    onClick={() => setUnit('in')}
+                    onClick={() => changeUnit('in')}
                     className={`px-3 py-1 rounded-lg font-semibold transition-all ${
                       unit === 'in' ? 'bg-gradient-to-r from-accent-800 to-accent-950 text-gold-300 shadow-sm' : 'text-gray-500 hover:text-gray-800'
                     }`}
@@ -490,7 +282,7 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setUnit('cm')}
+                    onClick={() => changeUnit('cm')}
                     className={`px-3 py-1 rounded-lg font-semibold transition-all ${
                       unit === 'cm' ? 'bg-gradient-to-r from-accent-800 to-accent-950 text-gold-300 shadow-sm' : 'text-gray-500 hover:text-gray-800'
                     }`}
@@ -509,9 +301,15 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
                     <input
                       type="number"
                       step="0.1"
+                      min="0.1"
                       value={measurementValues[p.key] ?? ''}
                       onChange={(e) =>
-                        setMeasurementValues((prev) => ({ ...prev, [p.key]: parseFloat(e.target.value) || 0 }))
+                        setMeasurementValues((prev) => {
+                          const next = { ...prev };
+                          if (e.target.value === '') delete next[p.key];
+                          else next[p.key] = parseFloat(e.target.value);
+                          return next;
+                        })
                       }
                       className="w-full bg-white/90 border border-gray-200/90 rounded-xl p-2 text-xs sm:text-sm font-semibold text-accent-950 text-center font-mono focus:outline-none focus:ring-2 focus:ring-gold-500/30 focus:border-gold-500 shadow-sm"
                     />
@@ -710,7 +508,8 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
                     min="1"
                     step="0.01"
                     value={totalAmount}
-                    onChange={(e) => setTotalAmount(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => setTotalAmount(e.target.value === '' ? '' : parseFloat(e.target.value) || 0)}
+                    placeholder="0.00"
                     className={`${inputClass} font-semibold font-mono`}
                   />
                 </div>
@@ -723,7 +522,8 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
                     min="0"
                     step="0.01"
                     value={depositPaid}
-                    onChange={(e) => setDepositPaid(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => setDepositPaid(e.target.value === '' ? '' : parseFloat(e.target.value) || 0)}
+                    placeholder="0.00"
                     className={`${inputClass} font-semibold text-emerald-800 font-mono`}
                   />
                 </div>
@@ -735,24 +535,31 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
                     onChange={(e) => setAssignedTailor(e.target.value)}
                     className={inputClass}
                   >
-                    <option value="Master Kwame Mensah">Master Kwame Mensah</option>
-                    <option value="Artisan Kofi Badu">Artisan Kofi Badu</option>
-                    <option value="Artisan Ama Frimpong">Artisan Ama Frimpong</option>
+                    <option value="">Select staff member</option>
+                    {staff.map((member) => <option key={member.id} value={member.id}>{member.full_name || 'Staff'}</option>)}
                   </select>
                 </div>
 
                 <div>
                   <label className={labelClass}>Target Due Date</label>
                   <input
-                    type="text"
+                    type="date"
                     value={dueDate}
                     onChange={(e) => setDueDate(e.target.value)}
-                    placeholder="AUG 24, 2026"
                     className={inputClass}
                   />
                 </div>
               </div>
-
+              {Number(depositPaid) > 0 && <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <label htmlFor="intake-payment-method" className={labelClass}>Deposit method
+                  <select id="intake-payment-method" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} className={inputClass}>
+                    {PAYMENT_METHODS.map((method) => <option key={method}>{method}</option>)}
+                  </select></label>
+                <label htmlFor="intake-payment-date" className={labelClass}>Receipt date (Ghana)
+                  <input id="intake-payment-date" type="date" required value={paymentDate} max={todayGhana()} onChange={(event) => setPaymentDate(event.target.value)} className={inputClass} /></label>
+                <label htmlFor="intake-payment-reference" className={labelClass}>Receipt reference
+                  <input id="intake-payment-reference" value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} className={inputClass} /></label>
+              </div>}
               <div className="p-3.5 bg-gold-50/70 border border-gold-500/25 rounded-xl text-xs flex justify-between items-center font-mono">
                 <span className="text-gray-600 font-sans">Remaining balance:</span>
                 <span className={`font-semibold text-sm ${remainingBalance === 0 ? 'text-emerald-800 font-sans' : 'text-accent-900'}`}>
@@ -795,8 +602,6 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
                 )}
               </button>
             </div>
-          </>
-        )}
       </form>
     </Modal>
   );

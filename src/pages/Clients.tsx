@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Search, User, Phone, Loader2, UserPlus, Users, ArrowRight } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { workshopOperation } from '../lib/workshopOperations';
+import { PageControls } from '../components/ui/PageControls';
 import { ClientProfile } from '../components/clients/ClientProfile';
 import { QuickIntakeModal } from '../components/workshop/QuickIntakeModal';
 
@@ -16,30 +17,16 @@ export const Clients: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [isIntakeOpen, setIsIntakeOpen] = useState(false);
+  const [page,setPage]=useState(0);const [total,setTotal]=useState(0);const [error,setError]=useState('');const [reload,setReload]=useState(0);
+  const [searchTerm,setSearchTerm]=useState('');
 
-  const load = async () => {
-    setIsLoading(true);
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, full_name, phone_number')
-      .eq('role', 'client')
-      .order('full_name', { ascending: true });
-    if (!error) setClients((data as ClientRow[]) || []);
-    setIsLoading(false);
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  const filtered = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return clients;
-    return clients.filter(
-      (c) => (c.full_name || '').toLowerCase().includes(q) || (c.phone_number || '').includes(q)
-    );
-  }, [clients, searchQuery]);
-
+  useEffect(()=>{const timer=setTimeout(()=>{setSearchTerm(searchQuery);setPage(0);},250);return()=>clearTimeout(timer);},[searchQuery]);
+  useEffect(()=>{let active=true;setIsLoading(true);
+    workshopOperation('workshop_client_page',{p_search:searchTerm.trim(),p_page:page}).then(data=>{if(active){setClients(data.records);setTotal(Number(data.total));setError('');}})
+      .catch(err=>{if(active)setError(err.message || 'Could not load customer records.');})
+      .finally(()=>{if(active)setIsLoading(false);});return()=>{active=false;};
+  },[searchTerm,page,reload]);
+  const filtered=clients;
   if (selectedClientId) {
     const client = clients.find((c) => c.id === selectedClientId);
     return (
@@ -73,6 +60,7 @@ export const Clients: React.FC = () => {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            aria-label="Search customers"
             placeholder="Search by client name or phone number..."
             className="w-full glass-inset pl-10 pr-4 py-3 text-sm text-gray-900 placeholder-gray-400 rounded-2xl border border-gray-200/80 focus:outline-none focus:ring-2 focus:ring-gold-500/30 focus:border-gold-500/50 shadow-sm transition-all"
           />
@@ -87,6 +75,7 @@ export const Clients: React.FC = () => {
         </button>
       </div>
 
+      {error && <p role="alert" className="text-sm text-rose-700">{error} <button onClick={()=>setReload(v=>v+1)} className="underline">Retry customer records</button></p>}
       {/* Content Area */}
       {isLoading ? (
         <div className="p-16 flex flex-col justify-center items-center gap-3 text-gray-500 text-sm">
@@ -134,12 +123,13 @@ export const Clients: React.FC = () => {
         </div>
       )}
 
+      <PageControls page={page} total={total} onChange={setPage} label="Customers"/>
       <QuickIntakeModal
         isOpen={isIntakeOpen}
         onClose={() => setIsIntakeOpen(false)}
         onOrderCreated={() => {
           setIsIntakeOpen(false);
-          load();
+          setSearchQuery('');setPage(0);setReload(v=>v+1);
         }}
       />
     </div>

@@ -102,9 +102,10 @@ export function generateInvoicePdf(order: BespokeJobOrder, settings: AppSettings
   // Pricing table
   const balance = Math.max(0, order.totalAmount - order.depositPaid);
   const rows: [string, string][] = [
-    ['Total Price', formatMoney(order.totalAmount, settings.currency)],
-    ['Deposit Paid', formatMoney(order.depositPaid, settings.currency)],
-    ['Balance Due', formatMoney(balance, settings.currency)],
+    ['Total Price', formatMoney(order.totalAmount, 'GHS')],
+    ['Total Paid', formatMoney(order.depositPaid, 'GHS')],
+    ['Balance Due', formatMoney(balance, 'GHS')],
+    ...(order.depositPaid > order.totalAmount ? [['Customer Credit', formatMoney(order.depositPaid - order.totalAmount, 'GHS')] as [string, string]] : []),
   ];
 
   doc.setFont('helvetica', 'bold');

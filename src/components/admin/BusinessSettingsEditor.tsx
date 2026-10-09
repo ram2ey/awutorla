@@ -78,14 +78,16 @@ export const BusinessSettingsEditor: React.FC = () => {
           />
         </div>
         <div>
-          <label className={labelClass}>Currency ISO Code</label>
+          <label className={labelClass}>Workshop Currency</label>
           <input
             type="text"
             value={settings.currency}
-            onChange={(e) => handleChange('currency', e.target.value.toUpperCase())}
+            readOnly
+            aria-label="Workshop currency, fixed to GHS"
             maxLength={3}
             className={`${inputClass} font-mono uppercase`}
           />
+          <p className="text-xs text-gray-500 mt-1">Fixed to GHS for all orders, payments and invoices.</p>
         </div>
         <div>
           <label className={labelClass}>Concierge Contact Phone</label>
@@ -107,17 +109,6 @@ export const BusinessSettingsEditor: React.FC = () => {
             className={inputClass}
           />
         </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <label className={labelClass}>WhatsApp Concierge Delivery Message Template</label>
-        <textarea
-          rows={3}
-          value={settings.whatsapp_delivery_message}
-          onChange={(e) => handleChange('whatsapp_delivery_message', e.target.value)}
-          className={`${inputClass} leading-relaxed font-sans`}
-        />
-        <p className="text-[11px] text-gray-400 font-mono">Use {'{orderId}'} and {'{businessName}'} as dynamic template tags.</p>
       </div>
 
       {saveSuccess && (

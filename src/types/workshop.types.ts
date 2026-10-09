@@ -40,11 +40,31 @@ export interface ClientBodyMeasurements {
   values: Record<string, number>;
   notes?: string;
   updatedAt: string;
+  revision?: number;
+  labels?: Record<string, string>;
+  capturedAt?: string;
+  source?: 'master' | 'intake' | 'applied' | 'legacy_migration';
+}
+
+export interface PaymentEntry {
+  id: string;
+  orderId: string;
+  kind: 'receipt' | 'reversal' | 'opening_balance';
+  amount: number;
+  currency: 'GHS';
+  method: string;
+  occurredOn: string | null;
+  reference: string;
+  notes: string;
+  recordedBy: string | null;
+  recordedByName: string;
+  recordedAt: string;
+  reversesPaymentId: string | null;
 }
 
 export interface BespokeJobOrder {
   id: string; // Order reference e.g. ORD-BESPOKE-884
-  clientId?: string | null; // profiles.id, when the client has an account
+  clientId?: string | null; // Independent customer record in clients.
   clientName: string;
   clientPhone: string;
   stage: WorkshopStage;
@@ -57,10 +77,17 @@ export interface BespokeJobOrder {
   swatchImage?: string;
   measurements: ClientBodyMeasurements;
   depositPaid: number;
+  currency?: 'GHS';
+  payments?: PaymentEntry[];
+  attachmentWarning?: boolean;
   totalAmount: number;
   assignedTailor: string;
+  assignedTailorId?: string;
   dueDate: string;
   createdAt: string;
+  updatedAt?: string;
+  workRevision?: number;
+  productionCycle?: number;
   tasks?: OrderTaskItem[];
   stageHistory: {
     stage: WorkshopStage;

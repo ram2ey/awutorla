@@ -1,5 +1,7 @@
 import { supabase } from './supabase';
-import type { BespokeJobOrder, WorkshopStage } from '../types/workshop.types';
+import type { BespokeJobOrder, WorkshopStage, PaymentEntry } from '../types/workshop.types';
+import { orderBalance, toPesewas } from './money';
+import { normalizeDueDate } from './dates';
 
 export interface OrderStatusCount {
   stage: WorkshopStage;
@@ -46,34 +48,36 @@ export function computeTailorLoads(orders: BespokeJobOrder[]): TailorLoad[] {
   );
 }
 
-export function computeRevenueThisMonth(orders: BespokeJobOrder[]): number {
-  const now = new Date();
-  return orders
-    .filter((o) => {
-      const created = new Date(o.createdAt);
-      return created.getFullYear() === now.getFullYear() && created.getMonth() === now.getMonth();
-    })
-    .reduce((sum, o) => sum + o.depositPaid, 0);
+export function computeRevenueThisMonth(payments: PaymentEntry[], now = new Date()): number {
+  const month = now.toISOString().slice(0, 7);
+  return payments.filter((entry) => entry.kind !== 'opening_balance' && entry.occurredOn?.slice(0, 7) === month)
+    .reduce((sum, entry) => sum + toPesewas(entry.amount), 0) / 100;
 }
 
 export function computeOutstandingBalance(orders: BespokeJobOrder[]): number {
-  return orders
-    .filter((o) => o.stage !== 'delivered')
-    .reduce((sum, o) => sum + Math.max(0, o.totalAmount - o.depositPaid), 0);
+  return orders.reduce((sum, order) => sum + toPesewas(orderBalance(order).due), 0) / 100;
+}
+export type OrderView = 'active' | 'overdue' | 'unpaid' | 'delivered_unpaid' | 'credit';
+export function ordersForView(orders: BespokeJobOrder[], view: OrderView, today = new Date().toISOString().slice(0, 10)) {
+  return orders.filter((order) => {
+    if (view === 'unpaid') return orderBalance(order).due > 0;
+    if (view === 'delivered_unpaid') return order.stage === 'delivered' && orderBalance(order).due > 0;
+    if (view === 'credit') return orderBalance(order).credit > 0;
+    if (view === 'overdue') { const due = normalizeDueDate(order.dueDate); return order.stage !== 'delivered' && due !== null && due < today; }
+    return order.stage !== 'delivered';
+  });
 }
 
 /**
- * Counts new client sign-ups this calendar month. Separate from the orders
+ * Counts new customer records this calendar month. Separate from the orders
  * data (which already carries everything else the dashboard needs) since it
- * comes from `profiles` rather than `orders`.
+ * comes from `clients` rather than `orders`.
  */
 export async function fetchNewClientsThisMonth(): Promise<number> {
-  const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const startOfMonth = `${new Date().toISOString().slice(0, 7)}-01T00:00:00Z`;
   const { count, error } = await supabase
-    .from('profiles')
+    .from('clients')
     .select('id', { count: 'exact', head: true })
-    .eq('role', 'client')
     .gte('created_at', startOfMonth);
   if (error) throw error;
   return count || 0;

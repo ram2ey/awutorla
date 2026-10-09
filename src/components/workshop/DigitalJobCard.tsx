@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Scissors,
   CheckCircle2,
@@ -6,7 +6,6 @@ import {
   Calendar,
   Layers,
   Sparkles,
-  MessageCircle,
   Loader2,
   ArrowRight,
   ShieldCheck,
@@ -19,18 +18,24 @@ import {
 } from 'lucide-react';
 import type { BespokeJobOrder, WorkshopStage, OrderTaskItem, TaskStatus, MeasurementParameter } from '../../types/workshop.types';
 import { MeasurementSilhouette } from './MeasurementSilhouette';
-import { formatWhatsAppStageMessage, formatWhatsAppInvoiceMessage, openWhatsAppChat } from '../../services/whatsapp';
 import { RecordPaymentModal } from './RecordPaymentModal';
 import { supabase } from '../../lib/supabase';
 import { saveOfflineJobCard } from '../../lib/offlineStore';
 import { fetchMeasurementParameters } from '../../lib/measurementParameters';
 import { fetchAppSettings, DEFAULT_APP_SETTINGS } from '../../lib/settings';
 import type { AppSettings } from '../../lib/settings';
-import { downloadInvoicePdf, invoicePdfBlob } from '../../lib/invoice';
 import { activeTabClass, inactiveTabClass } from '../ui/tabStyles';
-import { uploadInvoicePdf } from '../../lib/storage';
 import { useAuth } from '../../lib/auth';
+import { advanceOrder } from '../../services/progressSms';
+import { OrderSmsHistory } from './OrderSmsHistory';
+import { fetchStaffMembers } from '../../lib/clients';
+import type { StaffMember } from '../../lib/clients';
 import { Modal } from '../ui/Modal';
+import { PaymentLedger } from './PaymentLedger';
+import { applyOrderRecord, fetchOrder } from '../../lib/orders';
+import { orderBalance, formatGhs } from '../../lib/money';
+import { normalizeDueDate } from '../../lib/dates';
+import { WorkshopOperations } from './WorkshopOperations';
 
 export function getNextStage(current: WorkshopStage): WorkshopStage {
   switch (current) {
@@ -63,19 +68,28 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
   onOrderUpdated,
 }) => {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'measurements' | 'tasks' | 'fabric' | 'history'>('measurements');
+  const [activeTab, setActiveTab] = useState<'measurements' | 'tasks' | 'fabric' | 'history' | 'notifications' | 'payments' | 'operations'>('measurements');
+  const [confirmMeasurements, setConfirmMeasurements] = useState(false);
+  const [applyingMeasurements, setApplyingMeasurements] = useState(false);
+  const [dueDraft, setDueDraft] = useState('');
+  const [savingDue, setSavingDue] = useState(false);
   const [isAdvancing, setIsAdvancing] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [lastNotification, setLastNotification] = useState<{
-    stage: WorkshopStage;
-    message: string;
-  } | null>(null);
+  const [lastNotification, setLastNotification] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
-  const [newTaskTailor, setNewTaskTailor] = useState('Master Kwame Mensah');
+  const [newTaskTailor, setNewTaskTailor] = useState('');
   const [measurementParameters, setMeasurementParameters] = useState<MeasurementParameter[]>([]);
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
-  const [isSendingInvoice, setIsSendingInvoice] = useState(false);
-  const [invoiceError, setInvoiceError] = useState<string | null>(null);
+  const renewAttachments=useRef<()=>Promise<void>>(async()=>{});
+  renewAttachments.current=async()=>{if(!order)return;try{onOrderUpdated(await fetchOrder(order.id));}catch{setActionError('Could not renew attachment access. Check the connection and refresh.');}};
+  useEffect(()=>{
+    if(!isOpen || !order?.id)return;
+    const timer=setInterval(()=>void renewAttachments.current(),45*60*1000);
+    const onFocus=()=>void renewAttachments.current();window.addEventListener('focus',onFocus);
+    return()=>{clearInterval(timer);window.removeEventListener('focus',onFocus);};
+  },[isOpen,order?.id]);
 
   useEffect(() => {
     let isMounted = true;
@@ -102,10 +116,16 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
       setIsPaymentModalOpen(false);
       setLastNotification(null);
       setNewTaskTitle('');
-      setNewTaskTailor(order.assignedTailor || 'Master Kwame Mensah');
-      setIsSendingInvoice(false);
-      setInvoiceError(null);
+      setActionError(null);
+      setConfirmMeasurements(false);
+      setDueDraft(normalizeDueDate(order.dueDate) || '');
+      fetchStaffMembers().then((members) => {
+        setStaff(members);
+        setNewTaskTailor(order.assignedTailorId || members.find((member) => member.full_name === order.assignedTailor)?.id || members[0]?.id || '');
+      }).catch(() => setActionError('Could not load staff assignments.'));
     }
+    // Stage/payment updates to the same open card should preserve its current tab.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order?.id, isOpen]);
 
   if (!isOpen || !order) return null;
@@ -113,8 +133,8 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
   // Sub-tasks state
   const currentTasks = order.tasks || [];
   const nextStage = getNextStage(order.stage);
-  const isFinalStage = order.stage === 'delivered' || order.stage === 'ready';
-  const remainingBalance = Math.max(0, order.totalAmount - order.depositPaid);
+  const isFinalStage = order.stage === 'delivered';
+  const { due: remainingBalance, credit } = orderBalance(order);
 
   // Handle Sub-Task Status Toggle
   const handleToggleTaskStatus = async (taskId: string, currentStatus: TaskStatus) => {
@@ -139,20 +159,19 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
       tasks: updatedTasks,
     };
 
-    saveOfflineJobCard(updatedOrder);
-    onOrderUpdated(updatedOrder);
-
-    // Sync to Supabase
+    setActionError(null);
     try {
       const { error } = await (supabase.from('order_tasks') as any)
         .update({
           status: nextStatus,
           completed_at: nextStatus === 'completed' ? new Date().toISOString() : null,
         })
-        .eq('id', taskId);
-      if (error) console.error('[DigitalJobCard] Task update failed:', error);
+        .eq('id', taskId).eq('status', currentStatus).select('id').single();
+      if (error) throw error;
+      saveOfflineJobCard(updatedOrder);
+      onOrderUpdated(updatedOrder);
     } catch (err) {
-      console.error('[DigitalJobCard] Task update threw:', err);
+      setActionError(err instanceof Error ? err.message : 'Could not update task. Refresh the order and try again.');
     }
   };
 
@@ -160,11 +179,13 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
   const handleAddNewTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTaskTitle.trim()) return;
+    const tailor = staff.find((member) => member.id === newTaskTailor);
+    if (!tailor) { setActionError('Select an active staff member.'); return; }
 
     const newTask: OrderTaskItem = {
-      id: `tsk-${Date.now().toString().slice(-4)}`,
+      id: `tsk-${crypto.randomUUID()}`,
       orderId: order.id,
-      tailorName: newTaskTailor,
+      tailorName: tailor.full_name || 'Staff',
       title: newTaskTitle.trim(),
       status: 'pending',
       assignedAt: new Date().toISOString(),
@@ -176,104 +197,84 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
       tasks: updatedTasks,
     };
 
-    saveOfflineJobCard(updatedOrder);
-    onOrderUpdated(updatedOrder);
-    setNewTaskTitle('');
-
-    // Sync to Supabase
+    setActionError(null);
     if (user) {
       try {
         const { error } = await (supabase.from('order_tasks') as any).insert({
           id: newTask.id,
           order_id: order.id,
-          tailor_id: user.id,
-          tailor_name: newTaskTailor,
+          tailor_id: tailor.id,
+          tailor_name: tailor.full_name || 'Staff',
           title: newTask.title,
           status: newTask.status,
         });
-        if (error) console.error('[DigitalJobCard] Task insert failed:', error);
+        if (error) throw error;
+        saveOfflineJobCard(updatedOrder);
+        onOrderUpdated(updatedOrder);
+        setNewTaskTitle('');
       } catch (err) {
-        console.error('[DigitalJobCard] Task insert threw:', err);
+        setActionError(err instanceof Error ? err.message : 'Could not save task. Please try again.');
       }
     }
   };
 
-  // Handle Mark Stage Complete
   const handleMarkStageComplete = async () => {
     setIsAdvancing(true);
+    setActionError(null);
     setLastNotification(null);
-
-    const targetStage = nextStage;
-    const waMessage = formatWhatsAppStageMessage(order, targetStage);
-    const updatedStageHistory = [
-      ...order.stageHistory,
-      {
-        stage: targetStage,
-        completedAt: new Date().toISOString(),
-        completedBy: order.assignedTailor,
-        notes: `Stage marked complete via shop-floor digital job card.`,
-      },
-    ];
-
-    // 1. Update Supabase Database
     try {
-      const { error } = await (supabase.from('orders') as any)
-        .update({
-          status: targetStage,
-          stage_history: updatedStageHistory,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', order.id);
-      if (error) console.error('[DigitalJobCard] Stage update failed:', error);
+      const result = await advanceOrder(order);
+      const updated = applyOrderRecord(order, result.order);
+      saveOfflineJobCard(updated);
+      onOrderUpdated(updated);
+      setLastNotification(result.message);
     } catch (err) {
-      console.error('[DigitalJobCard] Stage update threw:', err);
-    }
-
-    // 2. Update local and offline cache
-    const updated: BespokeJobOrder = {
-      ...order,
-      stage: targetStage,
-      stageHistory: updatedStageHistory,
-    };
-
-    saveOfflineJobCard(updated);
-    onOrderUpdated(updated);
-
-    setLastNotification({
-      stage: targetStage,
-      message: waMessage,
-    });
-    setIsAdvancing(false);
-  };
-
-  const handleDownloadInvoice = () => {
-    downloadInvoicePdf(order, appSettings);
-  };
-
-  // Uploads the generated invoice to storage and opens WhatsApp with a link to it —
-  // wa.me deep links can only pre-fill text, not attach a file, so a shareable link
-  // is the closest this app can get to "sending" the PDF itself.
-  const handleSendInvoiceViaWhatsApp = async () => {
-    setIsSendingInvoice(true);
-    setInvoiceError(null);
-    try {
-      const blob = invoicePdfBlob(order, appSettings);
-      const invoiceUrl = await uploadInvoicePdf(order.id, blob);
-      const waMsg = formatWhatsAppInvoiceMessage(order, invoiceUrl);
-      openWhatsAppChat(order.clientPhone, waMsg);
-    } catch (err) {
-      console.error('[DigitalJobCard] Invoice upload/share failed:', err);
-      setInvoiceError('Could not upload the invoice for sharing. You can still download it directly.');
+      setActionError(err instanceof Error ? err.message : 'Could not advance this order.');
     } finally {
-      setIsSendingInvoice(false);
+      setIsAdvancing(false);
     }
+  };
+
+  const handleDownloadInvoice = async () => {
+    try {
+      const { downloadInvoicePdf } = await import('../../lib/invoice');
+      downloadInvoicePdf(order, appSettings);
+    } catch {
+      setActionError('Could not generate the invoice. Please try again.');
+    }
+  };
+
+  const applyLatestMeasurements = async () => {
+    setApplyingMeasurements(true); setActionError(null);
+    try {
+      const { data, error } = await (supabase as any).rpc('apply_order_measurements', {
+        p_order_id: order.id, p_expected_capture: order.measurements.capturedAt || null,
+      });
+      if (error) throw new Error(error.message);
+      const updated = applyOrderRecord(order, data);
+      saveOfflineJobCard(updated); onOrderUpdated(updated); setConfirmMeasurements(false);
+    } catch (err) { setActionError(err instanceof Error ? err.message : 'Could not apply measurements.'); }
+    finally { setApplyingMeasurements(false); }
+  };
+  const saveDueDate = async () => {
+    setSavingDue(true); setActionError(null);
+    try {
+      const { data, error } = await (supabase.from('orders') as any).update({ due_date: dueDraft })
+        .eq('id', order.id).eq('due_date', order.dueDate).select('*').single();
+      if (error) throw new Error('Could not confirm this due date. Refresh the order before trying again.');
+      const updated = applyOrderRecord(order, data); saveOfflineJobCard(updated); onOrderUpdated(updated);
+    } catch (err) { setActionError(err instanceof Error ? err.message : 'Could not save due date.'); }
+    finally { setSavingDue(false); }
   };
 
   const tabs: { id: typeof activeTab; label: string }[] = [
     { id: 'measurements', label: 'Measurements' },
     { id: 'tasks', label: `Tasks (${currentTasks.length})` },
+    { id: 'operations', label: 'Fittings & Quality' },
     { id: 'fabric', label: 'Fabric & Specs' },
     { id: 'history', label: `History (${order.stageHistory.length})` },
+    { id: 'notifications', label: 'SMS History' },
+    { id: 'payments', label: 'Payments' },
   ];
 
   return (
@@ -303,9 +304,11 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
             <div>
               <span className="text-gray-400 block text-[10px] uppercase tracking-wider">Financial Balance</span>
               <span className="font-semibold text-gray-900 font-mono">
-                Paid: GHS {order.depositPaid.toFixed(0)} / {order.totalAmount.toFixed(0)}
+                Paid: {formatGhs(order.depositPaid)} / {formatGhs(order.totalAmount)}
                 {remainingBalance > 0 ? (
-                  <span className="text-rose-600 font-semibold ml-1.5 font-sans">(Due: GHS {remainingBalance.toFixed(0)})</span>
+                  <span className="text-rose-600 font-semibold ml-1.5 font-sans">(Due: {formatGhs(remainingBalance)})</span>
+                ) : credit > 0 ? (
+                  <span className="text-amber-800 font-semibold ml-1.5 font-sans">(Customer credit: {formatGhs(credit)})</span>
                 ) : (
                   <span className="text-emerald-700 font-semibold ml-1.5 font-sans">(Settled)</span>
                 )}
@@ -330,15 +333,6 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
               <FileDown size={12} className="text-gold-700" />
               <span>Invoice</span>
             </button>
-            <button
-              onClick={handleSendInvoiceViaWhatsApp}
-              disabled={isSendingInvoice}
-              title="Share invoice link via WhatsApp"
-              className="px-3 py-1.5 bg-[#25D366] hover:bg-[#1EBE5D] disabled:opacity-60 text-white font-medium text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
-            >
-              {isSendingInvoice ? <Loader2 size={12} className="animate-spin" /> : <MessageCircle size={12} />}
-              <span>Send</span>
-            </button>
           </div>
 
           <div className="flex items-center gap-4">
@@ -353,36 +347,8 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
           </div>
         </div>
 
-        {invoiceError && (
-          <div className="px-6 py-2.5 bg-rose-50 border-b border-rose-200 text-rose-700 text-xs flex items-center gap-2">
-            <AlertOctagon size={13} className="shrink-0" />
-            <span>{invoiceError}</span>
-          </div>
-        )}
-
-        {/* WhatsApp Notification Prompt Toast */}
-        {lastNotification && (
-          <div className="px-6 py-3 bg-emerald-50 border-b border-emerald-200 text-emerald-900 flex flex-wrap items-center justify-between gap-3 text-xs animate-in fade-in">
-            <div className="flex items-start gap-2.5 flex-1 min-w-[240px]">
-              <CheckCircle2 size={16} className="text-emerald-600 mt-0.5 shrink-0" />
-              <div>
-                <span className="font-semibold block">Stage advanced to {order.stage.toUpperCase()}</span>
-                <p className="opacity-80">Ready to notify client with direct WhatsApp concierge tracking.</p>
-              </div>
-            </div>
-
-            <button
-              onClick={() => {
-                const waMsg = formatWhatsAppStageMessage(order, lastNotification.stage);
-                openWhatsAppChat(order.clientPhone, waMsg);
-              }}
-              className="px-4 py-1.5 bg-[#25D366] hover:bg-[#1EBE5D] text-white rounded-xl font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-sm"
-            >
-              <MessageCircle size={14} />
-              <span>Send WhatsApp Update</span>
-            </button>
-          </div>
-        )}
+        {actionError && <p role="alert" className="px-6 py-3 text-xs bg-rose-50 text-rose-700">{actionError}</p>}
+        {lastNotification && <p role="status" className="px-6 py-3 text-xs bg-mustard-50 text-charcoal-900">{lastNotification}</p>}
 
         <div className="p-6 sm:p-7 space-y-6">
           {/* Navigation Tabs */}
@@ -411,13 +377,31 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
                   <span className="font-display text-base">Atelier Master Specification</span>
                 </div>
                 <p className="text-gray-700 text-xs leading-relaxed">
-                  Garment patterned with 1.5-inch side seam allowances for secondary client fitting adjustments. All measurements are precision synchronized with the client's master vault profile.
+                  These are the measurements saved for this order. Editing the customer master record does not change this specification.
                 </p>
+                <div className="space-y-2 border-t pt-3">
+                  <label htmlFor="order-due-date" className="text-xs font-semibold block">Order due date</label>
+                  <input id="order-due-date" type="date" value={dueDraft} disabled={savingDue || order.stage === 'delivered'} onChange={(event) => setDueDraft(event.target.value)} className="rounded-lg border p-2 text-xs bg-white" />
+                  {order.stage !== 'delivered' && <button disabled={savingDue} onClick={saveDueDate} className="text-xs underline ml-3">{savingDue ? 'Saving…' : 'Save due date'}</button>}
+                  {order.dueDate && !normalizeDueDate(order.dueDate) && <p className="text-xs text-amber-800">Previous date “{order.dueDate}” could not be interpreted. Set a date to include this order in overdue reporting.</p>}
+                </div>
+                <p className="text-xs text-gray-600">Saved version {order.measurements.revision || 0} · {order.measurements.capturedAt ? new Date(order.measurements.capturedAt).toLocaleString() : 'Capture date unavailable'}</p>
+                {order.measurements.source === 'legacy_migration' && <p className="text-xs text-amber-800">Captured during migration from the then-current master record. Original intake measurements could not be reconstructed.</p>}
+                {order.clientId && order.stage !== 'delivered' && (confirmMeasurements ? <div className="space-y-2 border-t pt-3">
+                  <p className="text-xs">Replace this active order's specification with the latest customer measurements?</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button disabled={applyingMeasurements} onClick={applyLatestMeasurements} className="rounded-lg px-3 py-2 bg-charcoal-950 text-white text-xs">{applyingMeasurements ? 'Applying…' : 'Confirm latest measurements'}</button>
+                    <button disabled={applyingMeasurements} onClick={() => setConfirmMeasurements(false)} className="text-xs px-3 py-2">Cancel</button>
+                  </div>
+                </div> : <button onClick={() => setConfirmMeasurements(true)} className="text-xs underline pt-2">Apply latest master measurements</button>)}
               </div>
             </div>
           )}
 
           {/* TAB: Tasks */}
+          {activeTab === 'payments' && <PaymentLedger key={order.id} order={order} onUpdated={onOrderUpdated} />}
+          {activeTab === 'operations' && <WorkshopOperations key={order.id} order={order} onUpdated={onOrderUpdated} />}
+          {order.attachmentWarning && <p className="text-xs text-amber-800">Some attachments could not be loaded. Refresh to renew access or check the stored file.</p>}
           {activeTab === 'tasks' && (
             <div className="space-y-6">
               <div>
@@ -447,7 +431,7 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
                       }`}
                     >
                       <div className="flex items-start gap-3 flex-1">
-                        <button onClick={() => handleToggleTaskStatus(t.id, t.status)} className="mt-0.5">
+                        <button disabled={isFinalStage} aria-label={`Change status for ${t.title}`} onClick={() => handleToggleTaskStatus(t.id, t.status)} className="mt-0.5">
                           {t.status === 'completed' ? (
                             <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
                           ) : t.status === 'in_progress' ? (
@@ -474,6 +458,7 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
                       </div>
 
                       <button
+                        disabled={isFinalStage}
                         onClick={() => handleToggleTaskStatus(t.id, t.status)}
                         className="px-3 py-1 rounded-xl border border-gray-200 bg-white/80 text-[11px] font-semibold text-gray-700 capitalize shadow-sm"
                       >
@@ -484,7 +469,7 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
                 )}
               </div>
 
-              <form onSubmit={handleAddNewTask} className="p-5 glass rounded-2xl space-y-3 border border-gold-500/20">
+              {isFinalStage ? <p className="text-xs text-gray-500">Delivered tasks are archived. An admin can reopen the order through Fittings & Quality.</p> : <form onSubmit={handleAddNewTask} className="p-5 glass rounded-2xl space-y-3 border border-gold-500/20">
                 <span className="text-xs font-semibold text-accent-900 block uppercase tracking-wider">Add Artisan Sub-Task</span>
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
                   <input
@@ -500,9 +485,8 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
                     onChange={(e) => setNewTaskTailor(e.target.value)}
                     className="sm:col-span-3 bg-white/90 p-2.5 text-xs text-gray-900 rounded-xl focus:outline-none border border-gray-200"
                   >
-                    <option value="Master Kwame Mensah">Master Kwame Mensah</option>
-                    <option value="Artisan Kofi Badu">Artisan Kofi Badu</option>
-                    <option value="Artisan Ama Frimpong">Artisan Ama Frimpong</option>
+                    <option value="">Select staff member</option>
+                    {staff.map((member) => <option key={member.id} value={member.id}>{member.full_name || 'Staff'}</option>)}
                   </select>
                   <button
                     type="submit"
@@ -512,13 +496,14 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
                     <span>Add Task</span>
                   </button>
                 </div>
-              </form>
+              </form>}
             </div>
           )}
 
           {/* TAB: Fabric & References */}
           {activeTab === 'fabric' && (
             <div className="space-y-6">
+              <button type="button" onClick={()=>void renewAttachments.current()} className="text-xs underline">Refresh attachment access</button>
               {order.referenceImages.length === 0 ? (
                 <div className="p-8 text-center glass rounded-2xl border border-gray-200/80 text-xs text-gray-500 flex flex-col items-center gap-2">
                   <ImageIcon size={22} className="text-gray-300" />
@@ -562,6 +547,8 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
               </div>
             </div>
           )}
+
+          {activeTab === 'notifications' && <OrderSmsHistory orderId={order.id} stage={order.stage} />}
 
           {/* TAB: History */}
           {activeTab === 'history' && (
@@ -622,7 +609,7 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
             ) : (
               <div className="px-5 py-3 bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-2xl text-xs font-semibold flex items-center gap-2 shadow-sm">
                 <Sparkles size={16} className="text-emerald-600" />
-                <span>Garment Completed / Ready for Delivery</span>
+                <span>Garment Delivered</span>
               </div>
             )}
           </div>

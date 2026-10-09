@@ -1,56 +1,34 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import {
   LayoutDashboard,
   Users,
   Settings as SettingsIcon,
-  Ruler,
-  ClipboardList,
-  Search,
   UserPlus,
   LogOut,
 } from 'lucide-react';
 import { TopNavBar } from './components/ui/TopNavBar';
 import type { DockItem } from './components/ui/TopNavBar';
-import { StaffDashboard } from './pages/StaffDashboard';
-import { Clients } from './pages/Clients';
-import { AdminSettings } from './pages/AdminSettings';
-import { ClientDashboard } from './pages/ClientDashboard';
-import { ClientProfilePage } from './pages/ClientProfilePage';
-import { ClientOrderTracker } from './components/orders/ClientOrderTracker';
-import { QuickIntakeModal } from './components/workshop/QuickIntakeModal';
 import { AuthScreen } from './components/auth/AuthScreen';
 import { SetNewPasswordScreen } from './components/auth/SetNewPasswordScreen';
 import { useAuth } from './lib/auth';
 import { fetchAppSettings, DEFAULT_APP_SETTINGS } from './lib/settings';
+import { OfflineWorkspace } from './components/workshop/OfflineWorkspace';
+const StaffDashboard=lazy(()=>import('./pages/StaffDashboard'));
+const Clients=lazy(()=>import('./pages/Clients'));
+const AdminSettings=lazy(()=>import('./pages/AdminSettings'));
+const QuickIntakeModal=lazy(()=>import('./components/workshop/QuickIntakeModal'));
 
 function App() {
   const { session, profile, loading: authLoading, isPasswordRecovery, signOut } = useAuth();
 
   const [activeTab, setActiveTab] = useState<string>('');
-  const [isOrderTrackerOpen, setIsOrderTrackerOpen] = useState<boolean>(false);
-  const [deepLinkOrderId, setDeepLinkOrderId] = useState<string | undefined>(undefined);
   const [isIntakeOpen, setIsIntakeOpen] = useState<boolean>(false);
   const [businessName, setBusinessName] = useState<string>(DEFAULT_APP_SETTINGS.business_name);
 
-  // Deep-link detection for SMS tracking links (?track=ORD-XXX or ?order=ORD-XXX)
   useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const trackId = params.get('track') || params.get('order') || params.get('id');
-      if (trackId) {
-        setDeepLinkOrderId(trackId);
-        setIsOrderTrackerOpen(true);
-      }
-    } catch {
-      // Ignore in non-browser environments
-    }
-  }, []);
-
-  // Default the active tab once the signed-in user's role is known.
-  useEffect(() => {
-    if (!profile || activeTab) return;
-    setActiveTab(profile.role === 'client' ? 'my-dashboard' : 'dashboard');
-  }, [profile, activeTab]);
+    setActiveTab('dashboard');
+    setIsIntakeOpen(false);
+  }, [session?.user.id, profile?.role]);
 
   useEffect(() => {
     if (!session) return;
@@ -62,8 +40,7 @@ function App() {
   const isStaff = profile?.role === 'tailor' || profile?.role === 'admin';
   const isAdmin = profile?.role === 'admin';
 
-  const dockItems: DockItem[] = isStaff
-    ? [
+  const dockItems: DockItem[] = [
         {
           id: 'dashboard',
           label: 'Dashboard',
@@ -88,20 +65,6 @@ function App() {
               },
             ]
           : []),
-      ]
-    : [
-        {
-          id: 'my-dashboard',
-          label: 'My Dashboard',
-          icon: <ClipboardList size={19} />,
-          onClick: () => setActiveTab('my-dashboard'),
-        },
-        {
-          id: 'my-profile',
-          label: 'My Profile',
-          icon: <Ruler size={19} />,
-          onClick: () => setActiveTab('my-profile'),
-        },
       ];
 
   if (authLoading) {
@@ -112,30 +75,14 @@ function App() {
     );
   }
 
-  // Opening a password-reset email link creates a real (narrowly-scoped) session, so
-  // this must be checked before the normal session gate below, or the user would land
-  // straight in the app instead of being asked to set a new password.
-  if (isPasswordRecovery) {
-    return <SetNewPasswordScreen />;
+  if (!session) return <AuthScreen />;
+  if (!isStaff || profile?.id !== session.user.id) {
+    return <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-gray-100 p-6">
+      <p className="text-sm">This workspace is available to atelier staff only.</p>
+      <button onClick={() => signOut()} className="rounded-xl bg-charcoal-950 text-white px-5 py-2 text-sm">Back to staff sign in</button>
+    </div>;
   }
-
-  // A client following a `?track=` SMS/WhatsApp link should be able to check their
-  // order without signing in — that's the whole point of sending them a link. This
-  // renders the tracker standalone (it looks up just that one order via a secure
-  // Edge Function, not the full authenticated order list) instead of the login wall.
-  if (!session && deepLinkOrderId) {
-    return (
-      <ClientOrderTracker
-        isOpen={true}
-        onClose={() => setDeepLinkOrderId(undefined)}
-        initialOrderId={deepLinkOrderId}
-      />
-    );
-  }
-
-  if (!session) {
-    return <AuthScreen />;
-  }
+  if (isPasswordRecovery) return <SetNewPasswordScreen />;
 
   return (
     <div className="min-h-screen bg-gray-100 text-gray-900 font-sans p-3 sm:p-6 lg:p-8 relative overflow-x-hidden">
@@ -167,15 +114,6 @@ function App() {
                 </button>
               )}
 
-              {/* Track Garment Passport Action */}
-              <button
-                onClick={() => setIsOrderTrackerOpen(true)}
-                className="glass-inset px-3.5 py-2 text-xs font-medium text-gray-700 hover:text-charcoal-900 hover:bg-white rounded-xl border border-gray-200/80 flex items-center gap-1.5 transition-all duration-200 shadow-sm"
-              >
-                <Search size={14} className="text-charcoal-700" />
-                <span>Track Order</span>
-              </button>
-
               {/* Signed-in Identity & Sign Out */}
               <div className="flex items-center gap-2 pl-1 text-xs">
                 <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-gray-50 border border-gray-200/60 shadow-sm">
@@ -198,42 +136,26 @@ function App() {
         </header>
 
         {/* Main Content Workspace */}
-        <main className="px-4 sm:px-6 py-8 sm:py-10">
+        <main className="px-4 sm:px-6 py-8 sm:py-10"><Suspense fallback={<p className="text-sm">Loading workspace…</p>}>
+          <OfflineWorkspace key={`offline:${session.user.id}`}/>
 
-          {isStaff && activeTab === 'dashboard' && <StaffDashboard />}
-          {isStaff && activeTab === 'clients' && <Clients />}
+          {isStaff && activeTab === 'dashboard' && <StaffDashboard key={session.user.id} />}
+          {isStaff && activeTab === 'clients' && <Clients key={session.user.id} />}
           {isStaff && isAdmin && activeTab === 'settings' && <AdminSettings />}
 
-          {!isStaff && activeTab === 'my-dashboard' && (
-            <ClientDashboard
-              onViewOrder={(orderId) => {
-                setDeepLinkOrderId(orderId);
-                setIsOrderTrackerOpen(true);
-              }}
-              onGoToProfile={() => setActiveTab('my-profile')}
-            />
-          )}
-          {!isStaff && activeTab === 'my-profile' && <ClientProfilePage />}
 
-        </main>
+        </Suspense></main>
       </div>
 
-      {/* Client Order Tracking */}
-      <ClientOrderTracker
-        isOpen={isOrderTrackerOpen}
-        onClose={() => setIsOrderTrackerOpen(false)}
-        initialOrderId={deepLinkOrderId}
-      />
-
       {/* Rapid Bespoke Intake Modal */}
-      <QuickIntakeModal
+      <Suspense fallback={null}><QuickIntakeModal
         isOpen={isIntakeOpen}
         onClose={() => setIsIntakeOpen(false)}
         onOrderCreated={() => {
           setIsIntakeOpen(false);
           setActiveTab('clients');
         }}
-      />
+      /></Suspense>
 
     </div>
   );

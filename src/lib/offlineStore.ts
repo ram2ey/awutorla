@@ -2,6 +2,50 @@ import type { BespokeJobOrder, ClientBodyMeasurements } from '../types/workshop.
 
 const OFFLINE_ORDERS_KEY = 'maison_offline_job_cards_v1';
 const OFFLINE_MEASUREMENTS_KEY = 'maison_offline_measurements_v1';
+const OFFLINE_OWNER_KEY = 'maison_offline_owner_v1';
+const OFFLINE_DRAFTS_KEY = 'maison_offline_measurement_drafts_v1';
+let memoryDrafts: MeasurementDraft[] = [];
+export interface MeasurementDraft {
+  id: string; clientId: string; clientName: string; expectedRevision: number;
+  unit: 'in'|'cm'; values: Record<string,number>; notes: string; createdAt: string;
+}
+export function getMeasurementDrafts(): MeasurementDraft[] {
+  if (!currentOwner) return [];
+  if (isStorageAvailable()) {
+    try {memoryDrafts=JSON.parse(localStorage.getItem(OFFLINE_DRAFTS_KEY) || '[]');} catch { /* memory fallback */ }
+  }
+  return [...memoryDrafts];
+}
+export function saveMeasurementDraft(draft: MeasurementDraft): void {
+  if (!currentOwner) throw new Error('Staff sign-in required to retain an offline draft.');
+  const drafts=getMeasurementDrafts().filter(entry=>entry.clientId!==draft.clientId);drafts.push(draft);
+  if (isStorageAvailable()) localStorage.setItem(OFFLINE_DRAFTS_KEY,JSON.stringify(drafts));
+  memoryDrafts=drafts;
+  if(typeof window!=='undefined')window.dispatchEvent(new Event('workshop-drafts-changed'));
+}
+export function removeMeasurementDraft(id:string):void {
+  const drafts=getMeasurementDrafts().filter(entry=>entry.id!==id);
+  if(isStorageAvailable())localStorage.setItem(OFFLINE_DRAFTS_KEY,JSON.stringify(drafts));
+  memoryDrafts=drafts;
+  if(typeof window!=='undefined')window.dispatchEvent(new Event('workshop-drafts-changed'));
+}
+let currentOwner: string | null = null;
+
+/** Keeps shared-tablet caches tied to one staff identity, including external sign-outs. */
+export function setOfflineStoreOwner(userId: string | null): void {
+  let previousOwner = currentOwner;
+  if (isStorageAvailable()) {
+    try { previousOwner = localStorage.getItem(OFFLINE_OWNER_KEY); } catch { /* use memory */ }
+  }
+  if (!userId || previousOwner !== userId) clearOfflineStore();
+  currentOwner = userId;
+  if (isStorageAvailable()) {
+    try {
+      if (userId) localStorage.setItem(OFFLINE_OWNER_KEY, userId);
+      else localStorage.removeItem(OFFLINE_OWNER_KEY);
+    } catch { /* storage may be disabled */ }
+  }
+}
 
 // In-memory fallback if localStorage is disabled or in non-browser environment
 const inMemoryOrders = new Map<string, BespokeJobOrder>();
@@ -35,6 +79,8 @@ export function saveOfflineJobCard(order: BespokeJobOrder): void {
       console.warn('[OfflineStore] Failed to write order to localStorage:', err);
     }
   }
+  // Reading existing storage above can populate an older in-memory copy.
+  inMemoryOrders.set(order.id, order);
 }
 
 /**
@@ -128,6 +174,27 @@ export function getOfflineMeasurements(
   }
 
   return null;
+}
+
+/**
+ * Clears every cached job card and measurement — call on sign-out so the next
+ * person to use a shared shop-floor tablet doesn't inherit the previous
+ * staff member's client data from localStorage.
+ */
+export function clearOfflineStore(): void {
+  memoryDrafts=[];
+  inMemoryOrders.clear();
+  inMemoryMeasurements.clear();
+
+  if (isStorageAvailable()) {
+    try {
+      localStorage.removeItem(OFFLINE_ORDERS_KEY);
+      localStorage.removeItem(OFFLINE_MEASUREMENTS_KEY);
+      localStorage.removeItem(OFFLINE_DRAFTS_KEY);
+    } catch (err) {
+      console.warn('[OfflineStore] Failed to clear localStorage:', err);
+    }
+  }
 }
 
 /**

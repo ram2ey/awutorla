@@ -1,283 +1,114 @@
-import React, { useEffect, useState } from 'react';
-import {
-  ShieldCheck,
-  Save,
-  CheckCircle2,
-  Lock,
-  Loader2,
-} from 'lucide-react';
-import type { MeasurementParameter } from '../../types/workshop.types';
+import { useEffect, useRef, useState } from 'react';
+import type { ClientBodyMeasurements, MeasurementParameter } from '../../types/workshop.types';
 import { supabase } from '../../lib/supabase';
 import { fetchMeasurementParameters } from '../../lib/measurementParameters';
-import { cacheClientMeasurements } from '../../lib/offlineStore';
-import { useAuth } from '../../lib/auth';
+import { cacheClientMeasurements, getOfflineMeasurements, getMeasurementDrafts, isOnline, saveMeasurementDraft } from '../../lib/offlineStore';
 
-interface MeasurementVaultSyncProps {
-  // Defaults to the signed-in user's own id ("My Profile"). Staff pass a
-  // different client's id when editing that client's measurements.
-  targetClientId?: string;
-}
-
-export const MeasurementVaultSync: React.FC<MeasurementVaultSyncProps> = ({ targetClientId }) => {
-  const { user, profile } = useAuth();
-  const clientId = targetClientId || user?.id || '';
-
+export function MeasurementVaultSync({ targetClientId }: { targetClientId: string }) {
   const [parameters, setParameters] = useState<MeasurementParameter[]>([]);
   const [unit, setUnit] = useState<'in' | 'cm'>('in');
   const [values, setValues] = useState<Record<string, number>>({});
-  const [notes, setNotes] = useState<string>('');
-  const [clientName, setClientName] = useState<string>('');
-  const [clientPhone, setClientPhone] = useState<string>('');
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [syncSuccess, setSyncSuccess] = useState<boolean>(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
+  const [notes, setNotes] = useState('');
+  const [clientName, setClientName] = useState('');
+  const [revision, setRevision] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const [draftSaved,setDraftSaved]=useState(false);
+  const submission=useRef<{id:string;request:string}|null>(null);
+  useEffect(()=>{
+    const changed=()=>setDraftSaved(getMeasurementDrafts().some(draft=>draft.clientId===targetClientId));changed();
+    window.addEventListener('workshop-drafts-changed',changed);
+    return()=>window.removeEventListener('workshop-drafts-changed',changed);
+  },[targetClientId]);
   useEffect(() => {
-    let isMounted = true;
-    if (!clientId) {
-      setIsLoading(false);
-      return;
-    }
-
+    let active = true;
+    setLoading(true); setError(null); setLoadFailed(false); setSuccess(false);
     async function load() {
-      setIsLoading(true);
       try {
-        const [params, headerResult, valuesResult, profileResult] = await Promise.all([
+        const [params, header, measurements, customer] = await Promise.all([
           fetchMeasurementParameters(),
-          supabase.from('client_measurements').select('*').eq('client_id', clientId).maybeSingle(),
-          supabase
-            .from('client_measurement_values')
-            .select('value, measurement_parameters(key)')
-            .eq('client_id', clientId),
-          supabase.from('profiles').select('full_name, phone_number').eq('id', clientId).maybeSingle(),
+          supabase.from('client_measurements').select('*').eq('client_id', targetClientId).maybeSingle(),
+          supabase.from('client_measurement_values').select('value, measurement_parameters(key)').eq('client_id', targetClientId),
+          supabase.from('clients').select('full_name, phone_number').eq('id', targetClientId).maybeSingle(),
         ]);
-        if (!isMounted) return;
-
-        setParameters(params);
-        const header = headerResult.data as any;
-        setUnit(header?.unit === 'cm' ? 'cm' : 'in');
-        setNotes(header?.notes || '');
-
-        const profileRow = profileResult.data as any;
-        setClientName(profileRow?.full_name || '');
-        setClientPhone(profileRow?.phone_number || '');
-
-        const nextValues: Record<string, number> = {};
-        for (const row of (valuesResult.data || []) as any[]) {
-          const key = row.measurement_parameters?.key;
-          if (key) nextValues[key] = Number(row.value);
-        }
-        setValues(nextValues);
-      } catch (err) {
-        console.error('[MeasurementVaultSync] Failed to load measurements:', err);
-        if (isMounted) setErrorMessage('Could not load measurements from the cloud.');
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
+        if (header.error) throw header.error;
+        if (measurements.error) throw measurements.error;
+        if (customer.error) throw customer.error;
+        if (!customer.data) throw new Error('Customer record is unavailable.');
+        if (!active) return;
+        const record = header.data as any;
+        setParameters(params); setUnit(record?.unit === 'cm' ? 'cm' : 'in'); setRevision(Number(record?.revision || 0));
+        setNotes(record?.notes || ''); setClientName((customer.data as any).full_name || 'Customer');
+        const next: Record<string, number> = {};
+        for (const row of (measurements.data || []) as any[]) if (row.measurement_parameters?.key) next[row.measurement_parameters.key] = Number(row.value);
+        setValues(next);
+        cacheClientMeasurements(targetClientId,{clientId:targetClientId,clientName:(customer.data as any).full_name,clientPhone:(customer.data as any).phone_number,
+          unit:record?.unit || 'in',values:next,notes:record?.notes || '',revision:Number(record?.revision || 0),updatedAt:record?.updated_at || new Date().toISOString(),labels:Object.fromEntries(params.map(p=>[p.key,p.label]))});
+      } catch (err) { if (active) {
+        const cached=!isOnline() ? getOfflineMeasurements(targetClientId) : null;
+        if(cached?.labels){setUnit(cached.unit);setValues(cached.values);setNotes(cached.notes || '');setRevision(cached.revision || 0);setClientName(cached.clientName);setParameters(Object.entries(cached.labels).map(([key,label],index)=>({id:key,key,label,isActive:true,displayOrder:index})));setError('Offline: showing cached measurements. Save changes as a draft for review when online.');}
+        else {setLoadFailed(true);setError(err instanceof Error ? err.message : 'Could not load measurements. Reload before editing.');}
+      } }
+      finally { if (active) setLoading(false); }
     }
-
-    load();
-    return () => {
-      isMounted = false;
-    };
-  }, [clientId]);
-
-  const handleUnitToggle = (nextUnit: 'in' | 'cm') => {
-    if (unit === nextUnit) return;
-    const factor = nextUnit === 'cm' ? 2.54 : 1 / 2.54;
-    const converted: Record<string, number> = {};
-    for (const [key, val] of Object.entries(values)) {
-      converted[key] = parseFloat((val * factor).toFixed(1));
-    }
-    setValues(converted);
-    setUnit(nextUnit);
-  };
-
-  const handleValueChange = (key: string, raw: string) => {
-    const parsed = parseFloat(raw);
-    setValues((prev) => ({ ...prev, [key]: Number.isNaN(parsed) ? 0 : parsed }));
-  };
-
-  const handleSaveToSupabase = async () => {
-    if (!clientId) return;
-    setIsSyncing(true);
-    setSyncSuccess(false);
-    setErrorMessage(null);
-
-    const now = new Date().toISOString();
-
-    try {
-      cacheClientMeasurements(clientId, {
-        clientId,
-        clientName: clientName || profile?.full_name || '',
-        clientPhone: clientPhone || profile?.phone_number || '',
-        unit,
-        values,
-        notes: notes.trim() || undefined,
-        updatedAt: now,
-      });
-
-      const { error: headerError } = await (supabase.from('client_measurements') as any).upsert(
-        {
-          client_id: clientId,
-          unit,
-          notes: notes.trim() || null,
-          updated_at: now,
-        },
-        { onConflict: 'client_id' }
-      );
-      if (headerError) throw headerError;
-
-      const valueRows = parameters
-        .filter((p) => values[p.key] !== undefined && !Number.isNaN(values[p.key]))
-        .map((p) => ({
-          client_id: clientId,
-          parameter_id: p.id,
-          value: values[p.key],
-          updated_at: now,
-        }));
-
-      if (valueRows.length > 0) {
-        const { error: valuesError } = await (supabase.from('client_measurement_values') as any).upsert(
-          valueRows,
-          { onConflict: 'client_id,parameter_id' }
-        );
-        if (valuesError) throw valuesError;
-      }
-
-      setIsSyncing(false);
-      setSyncSuccess(true);
-      setTimeout(() => setSyncSuccess(false), 3000);
-    } catch (err: unknown) {
-      console.error('[MeasurementVaultSync] Save threw:', err);
-      setIsSyncing(false);
-      setErrorMessage(err instanceof Error ? err.message : 'Failed to save measurements.');
-    }
-  };
-
-  if (isLoading) {
-    return (
-      <div className="p-12 flex flex-col justify-center items-center gap-2 text-gray-500 text-sm">
-        <Loader2 size={20} className="animate-spin text-accent-700" />
-        <span>Synchronizing measurement vault...</span>
-      </div>
-    );
+    load(); return () => { active = false; };
+  }, [targetClientId, reload]);
+  function changeUnit(next: 'in' | 'cm') {
+    if (next === unit) return;
+    const factor = next === 'cm' ? 2.54 : 1 / 2.54;
+    setValues((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [key, Number((value * factor).toFixed(2))])));
+    setUnit(next); setSuccess(false);
   }
-
-  return (
-    <div className="p-6 sm:p-8 glass rounded-3xl border border-gold-500/25 shadow-luxury space-y-6">
-
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-gray-200/80 pb-5">
-        <div className="flex items-center gap-3.5">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-accent-800 to-accent-950 text-gold-300 border border-gold-500/40 flex items-center justify-center shadow-sm">
-            <Lock size={18} />
-          </div>
-          <div>
-            <span className="text-xs font-semibold text-accent-900 uppercase tracking-widest">Master Vault</span>
-            <h3 className="text-xl sm:text-2xl font-bold text-accent-950 font-display">Client Tailoring Passport</h3>
-          </div>
-        </div>
-
-        {/* Unit Switcher */}
-        <div className="flex items-center gap-1 bg-gray-100/90 p-1 rounded-xl border border-gray-200/60 self-stretch sm:self-auto justify-center">
-          <button
-            onClick={() => handleUnitToggle('in')}
-            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
-              unit === 'in' ? 'bg-gradient-to-r from-accent-800 to-accent-950 text-gold-300 shadow-sm' : 'text-gray-500 hover:text-gray-900'
-            }`}
-          >
-            Inches
-          </button>
-          <button
-            onClick={() => handleUnitToggle('cm')}
-            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
-              unit === 'cm' ? 'bg-gradient-to-r from-accent-800 to-accent-950 text-gold-300 shadow-sm' : 'text-gray-500 hover:text-gray-900'
-            }`}
-          >
-            Metric (cm)
-          </button>
-        </div>
-      </div>
-
-      {/* Dynamic Measurement Parameter Grid */}
-      {parameters.length === 0 ? (
-        <div className="p-6 glass rounded-2xl text-xs text-gray-500 text-center">
-          No measurement parameters configured in the master settings.
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {parameters.map((p) => (
-            <div key={p.id} className="p-3.5 glass rounded-2xl text-center border border-gray-200/70 hover:border-gold-500/30 transition-all shadow-sm">
-              <label htmlFor={`measurement-${p.key}`} className="text-[11px] font-semibold text-gray-500 block mb-1 truncate">
-                {p.label}
-              </label>
-              <input
-                id={`measurement-${p.key}`}
-                type="number"
-                step="0.1"
-                value={values[p.key] ?? ''}
-                onChange={(e) => handleValueChange(p.key, e.target.value)}
-                className="w-full bg-white/90 border border-gray-200/90 rounded-xl p-2 text-sm font-bold font-mono text-accent-950 text-center focus:outline-none focus:ring-2 focus:ring-gold-500/30 focus:border-gold-500 shadow-sm"
-              />
-              <span className="text-[10px] text-gold-700 font-mono block mt-1 uppercase">{unit}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Posture & Fitting Notes */}
-      <div className="space-y-1.5">
-        <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider">Fitting & Posture Notes</label>
-        <textarea
-          rows={2}
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="e.g. Higher left shoulder posture, preference for high-waisted toile drape..."
-          className="w-full bg-white/90 border border-gray-200/90 rounded-2xl p-3.5 text-xs sm:text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gold-500/30 focus:border-gold-500 leading-relaxed shadow-sm transition-all"
-        />
-      </div>
-
-      {/* Success Notification Banner */}
-      {syncSuccess && !errorMessage && (
-        <div className="p-3.5 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-2xl text-xs font-semibold flex items-center gap-2 animate-in fade-in shadow-sm">
-          <CheckCircle2 size={16} className="shrink-0 text-emerald-600" />
-          <span>Tailoring passport synchronized successfully with atelier database.</span>
-        </div>
-      )}
-
-      {/* Sync Error Banner */}
-      {errorMessage && (
-        <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl text-xs flex items-center gap-2">
-          <ShieldCheck size={16} className="shrink-0 text-rose-600" />
-          <span>{errorMessage}</span>
-        </div>
-      )}
-
-      {/* Action Footer */}
-      <div className="flex flex-col sm:flex-row justify-end items-center gap-4 pt-2 border-t border-gray-200/80">
-        <button
-          onClick={handleSaveToSupabase}
-          disabled={isSyncing || !clientId}
-          className="w-full sm:w-auto px-6 py-2.5 bg-gradient-to-r from-accent-800 to-accent-600 hover:from-accent-700 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-accent-900/15 flex items-center justify-center gap-2 disabled:opacity-50"
-        >
-          {isSyncing ? (
-            <>
-              <Loader2 size={15} className="animate-spin text-gold-300" />
-              <span>Syncing...</span>
-            </>
-          ) : (
-            <>
-              <Save size={15} className="text-gold-300" />
-              <span>Save & Sync Passport</span>
-            </>
-          )}
-        </button>
-      </div>
-
+  async function save(event: React.FormEvent, retainDraft=false) {
+    event.preventDefault(); if (loadFailed || busy) return;
+    const activeValues = Object.fromEntries(Object.entries(values).filter(([key]) => parameters.some((parameter) => parameter.key === key)));
+    if (Object.values(activeValues).some((value) => !Number.isFinite(value) || value <= 0)) { setError('Use positive measurements. Leave a field blank to remove it.'); return; }
+    setBusy(true); setSuccess(false); setError(null);
+    try {
+      const args={p_client_id:targetClientId,p_expected_revision:revision,p_unit:unit,p_values:activeValues,p_notes:notes.trim()};
+      const request=JSON.stringify(args);if(submission.current?.request!==request)submission.current={id:crypto.randomUUID(),request};
+      if(retainDraft || !isOnline()){saveMeasurementDraft({id:submission.current.id,clientId:targetClientId,clientName,expectedRevision:revision,unit,values:activeValues,notes:notes.trim(),createdAt:new Date().toISOString()});setDraftSaved(true);return;}
+      const { data, error: saveError } = await (supabase as any).rpc('save_measurement_draft', {p_id:submission.current.id,...args});
+      if (saveError) throw new Error(saveError.message || 'Could not confirm the save. Reload before trying again.');
+      const confirmed = data as ClientBodyMeasurements;
+      cacheClientMeasurements(targetClientId, {...confirmed,labels:Object.fromEntries(parameters.map(parameter=>[parameter.key,parameter.label]))}); setRevision(Number(confirmed.revision)); setValues(confirmed.values);
+      setUnit(confirmed.unit); setNotes(confirmed.notes || ''); setSuccess(true);setDraftSaved(false);submission.current=null;
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not save measurements.'); }
+    finally { setBusy(false); }
+  }
+  const inputClass = 'w-full rounded-xl border border-gray-200 bg-white p-3 text-sm focus:outline-none focus:ring-2 focus:ring-mustard-400';
+  return <div className="space-y-4">
+    <div className="flex flex-wrap justify-between gap-3">
+      <h3 className="font-semibold text-lg font-display">Customer master measurements</h3>
+      <button type="button" disabled={busy} onClick={() => setReload((value) => value + 1)} className="text-xs underline">Reload measurements</button>
     </div>
-  );
-};
-
+    <p className="text-xs text-gray-500">Changes update the master record. Existing order measurements stay unchanged until staff explicitly apply the latest version. Blank fields remove that measurement.</p>
+    {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+    {success && <p role="status" className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">Measurements saved together. Existing job cards retain their saved specifications.</p>}
+    {draftSaved && <p role="status" className="text-sm text-amber-800">Offline draft retained on this staff device. Sync and resolve any version conflict through the draft panel when online.</p>}
+    {loading ? <p className="text-sm">Loading measurements…</p> : !loadFailed && <form onSubmit={save} className="space-y-5">
+      <p className="text-sm font-medium">{clientName} · Version {revision}</p>
+      <fieldset disabled={busy} className="space-y-5">
+        <div className="flex gap-2" role="group" aria-label="Measurement unit">{(['in', 'cm'] as const).map((item) =>
+          <button type="button" key={item} aria-pressed={unit === item} onClick={() => changeUnit(item)}
+            className={`rounded-xl px-4 py-2 text-xs border ${unit === item ? 'bg-charcoal-950 text-white' : 'bg-white'}`}>{item === 'in' ? 'Inches' : 'Centimetres'}</button>)}</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">{parameters.map((parameter) => <label key={parameter.id} htmlFor={`measurement-${parameter.id}`} className="text-xs font-semibold space-y-1">
+          {parameter.label} ({unit})
+          <input id={`measurement-${parameter.id}`} type="number" min="0.01" max="9999.99" step="0.01" value={values[parameter.key] ?? ''}
+            onChange={(event) => { const raw = event.target.value; setSuccess(false); setValues((current) => {
+              const next = { ...current }; if (!raw) delete next[parameter.key]; else next[parameter.key] = Number(raw); return next;
+            }); }} className={inputClass} />
+        </label>)}</div>
+        <label htmlFor="measurement-notes" className="block text-xs font-semibold space-y-1">Fit notes
+          <textarea id="measurement-notes" rows={3} value={notes} onChange={(event) => { setNotes(event.target.value); setSuccess(false); }} className={inputClass} /></label>
+        <button className="rounded-xl bg-charcoal-950 text-white px-6 py-3 text-sm font-semibold">{busy ? 'Saving…' : isOnline() ? 'Save master measurements' : 'Save offline measurement draft'}</button>
+        {isOnline() && <button type="button" onClick={event=>void save(event,true)} className="text-xs underline ml-3">Save draft on this device</button>}
+      </fieldset>
+    </form>}
+  </div>;
+}
 export default MeasurementVaultSync;

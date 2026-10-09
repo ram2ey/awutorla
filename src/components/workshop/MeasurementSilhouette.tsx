@@ -18,7 +18,9 @@ export const MeasurementSilhouette: React.FC<MeasurementSilhouetteProps> = ({
   const unit = measurements.unit || 'in';
 
   const entries =
-    parameters && parameters.length > 0
+    measurements.labels && Object.keys(measurements.labels).length > 0
+      ? Object.entries(measurements.values).map(([key, value]) => ({ key, label: measurements.labels?.[key] || key.replace(/_/g, ' '), value }))
+      : parameters && parameters.length > 0
       ? parameters.map((p) => ({ key: p.key, label: p.label, value: measurements.values[p.key] }))
       : Object.entries(measurements.values).map(([key, value]) => ({
           key,

@@ -1,74 +1,28 @@
-// Awutorla - Offline Workshop Service Worker
-const CACHE_NAME = 'atelier-workshop-v1';
-
-const PRECACHE_ASSETS = [
-  '/',
-  '/index.html',
-  '/favicon.svg',
-  '/manifest.json',
-  '/editorial.png',
-  '/shop/kente_corset.png',
-  '/shop/fugu_blazer.png',
-  '/shop/adinkra_gown.png',
-];
-
-// Install Event: Cache Core Assets
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('[ServiceWorker] Pre-caching offline workshop shell assets');
-      return cache.addAll(PRECACHE_ASSETS).catch((err) => {
-        console.warn('[ServiceWorker] Some assets failed to pre-cache:', err);
-      });
-    })
-  );
+// Application shell only. Staff records and mutations never enter this cache.
+const CACHE_NAME='atelier-staff-workshop-v3';
+const SHELL=['/','/index.html','/favicon.svg','/manifest.json','/logo.png'];
+self.addEventListener('install',event=>{
+  event.waitUntil(caches.open(CACHE_NAME).then(cache=>Promise.allSettled(SHELL.map(path=>cache.add(path)))));
   self.skipWaiting();
 });
-
-// Activate Event: Cleanup Old Caches
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keyList) => {
-      return Promise.all(
-        keyList.map((key) => {
-          if (key !== CACHE_NAME) {
-            console.log('[ServiceWorker] Removing obsolete cache:', key);
-            return caches.delete(key);
-          }
-        })
-      );
-    })
-  );
-  self.clients.claim();
+self.addEventListener('activate',event=>{
+  event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('atelier-') && key!==CACHE_NAME).map(key=>caches.delete(key)))).then(()=>self.clients.claim()));
 });
-
-// Fetch Event: Stale-While-Revalidate Strategy for Offline Shop-Floor Support
-self.addEventListener('fetch', (event) => {
-  // Only handle GET requests
-  if (event.request.method !== 'GET') return;
-
-  // Ignore chrome-extension or non-http requests
-  if (!event.request.url.startsWith('http')) return;
-
-  event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      const fetchPromise = fetch(event.request)
-        .then((networkResponse) => {
-          // If valid response, clone into cache
-          if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
-            const responseToCache = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseToCache);
-            });
-          }
-          return networkResponse;
-        })
-        .catch(() => {
-          // Fallback to cache if network fails (offline)
-          return cachedResponse;
-        });
-
-      return cachedResponse || fetchPromise;
-    })
-  );
+self.addEventListener('fetch',event=>{
+  const url=new URL(event.request.url);
+  if(event.request.method!=='GET' || url.origin!==self.location.origin)return;
+  const navigation=event.request.mode==='navigate';
+  if(!navigation && !url.pathname.startsWith('/assets/') && !SHELL.includes(url.pathname))return;
+  async function network(){
+    const response=await fetch(event.request);
+    if(response.ok){const cache=await caches.open(CACHE_NAME);await cache.put(event.request,response.clone());}
+    return response;
+  }
+  event.respondWith((async()=>{
+    // A new deployment must replace the HTML shell; hashed assets are immutable.
+    if(!navigation && url.pathname.startsWith('/assets/')){const cached=await caches.match(event.request);if(cached)return cached;}
+    try{return await network();}catch{
+      return (await caches.match(event.request)) || (navigation && await caches.match('/index.html')) || Response.error();
+    }
+  })());
 });

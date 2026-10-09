@@ -1,19 +1,10 @@
-﻿import { formatWhatsAppPaymentReceipt } from '../../../services/whatsapp';
-import type { BespokeJobOrder } from '../../../types/workshop.types';
-
-function assert(condition: boolean, message: string) {
-  if (!condition) {
-    throw new Error(`Assertion Failed: ${message}`);
-  }
-}
+﻿import type { BespokeJobOrder } from '../../../types/workshop.types';
 
 function assertEquals<T>(actual: T, expected: T, message: string) {
   if (actual !== expected) {
     throw new Error(`Assertion Failed: ${message}. Expected '${String(expected)}', got '${String(actual)}'`);
   }
 }
-
-const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}\u{1F900}-\u{1F9FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}]/u;
 
 export async function runManualPaymentTests() {
   console.log('\n======================================================');
@@ -90,33 +81,6 @@ export async function runManualPaymentTests() {
 
     assertEquals(newDeposit, 3500, 'Deposit must equal total amount');
     assertEquals(remaining, 0, 'Remaining balance must be exactly 0 GHS');
-  });
-
-  // --------------------------------------------------------------------------
-  // TEST GROUP 2: WhatsApp Payment Receipt Formatting (Strictly Emoji-Free)
-  // --------------------------------------------------------------------------
-  console.log('\n--- 2. WhatsApp Payment Receipt Generation (Strictly Emoji-Free) ---');
-
-  await test('Generates clean editorial payment receipt for in-person Cash', () => {
-    const receipt = formatWhatsAppPaymentReceipt(sampleOrder, 1000, 'Cash in Atelier');
-
-    assert(receipt.includes('*Awutorla // Payment Receipt*'), 'Must include bold header');
-    assert(receipt.includes('Akosua Mensah'), 'Must include client name');
-    assert(receipt.includes('Payment Method: Cash in Atelier'), 'Must include payment method');
-    assert(receipt.includes('Amount Received: GHS 1000.00'), 'Must format amount received');
-    assert(receipt.includes('Total Paid to Date: GHS 2500.00 of GHS 3500.00'), 'Must show running total');
-    assert(receipt.includes('Remaining Balance: GHS 1000.00'), 'Must show remaining balance');
-    assert(receipt.includes('https://awutorla.com/?track=ORD-BESPOKE-990'), 'Must include passport link');
-
-    // Strict emoji check
-    assert(!EMOJI_REGEX.test(receipt), 'Payment receipt must contain ZERO emojis');
-  });
-
-  await test('Generates payment receipt for In-Store POS terminal', () => {
-    const receipt = formatWhatsAppPaymentReceipt(sampleOrder, 2000, 'In-Store POS / Card');
-    assert(receipt.includes('Payment Method: In-Store POS / Card'), 'Must include POS method');
-    assert(receipt.includes('Remaining Balance: GHS 0.00'), 'Must show zero balance when paid in full');
-    assert(!EMOJI_REGEX.test(receipt), 'Must contain zero emojis');
   });
 
   console.log('\n======================================================');

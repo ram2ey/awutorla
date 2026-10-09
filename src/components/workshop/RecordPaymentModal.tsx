@@ -1,276 +1,92 @@
-import React, { useState, useEffect } from 'react';
-import {
-  CreditCard,
-  CheckCircle2,
-  AlertCircle,
-  Loader2,
-  DollarSign,
-  Receipt,
-  MessageCircle,
-} from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Receipt } from 'lucide-react';
 import type { BespokeJobOrder } from '../../types/workshop.types';
-import { supabase } from '../../lib/supabase';
+import { fetchOrder } from '../../lib/orders';
+import { recordPayment, PAYMENT_METHODS } from '../../lib/payments';
+import { formatGhs, orderBalance, todayGhana } from '../../lib/money';
 import { saveOfflineJobCard } from '../../lib/offlineStore';
-import { formatWhatsAppPaymentReceipt, openWhatsAppChat } from '../../services/whatsapp';
 import { Modal } from '../ui/Modal';
 
-interface RecordPaymentModalProps {
-  order: BespokeJobOrder | null;
-  isOpen: boolean;
-  onClose: () => void;
-  onPaymentRecorded: (updatedOrder: BespokeJobOrder) => void;
-}
-
-export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
-  order,
-  isOpen,
-  onClose,
-  onPaymentRecorded,
-}) => {
-  const [paymentMethod, setPaymentMethod] = useState<string>('Cash in Atelier');
-  const [amountPaid, setAmountPaid] = useState<number>(0);
-  const [paymentNotes, setPaymentNotes] = useState<string>('Paid at Osu studio reception.');
-  const [isRecording, setIsRecording] = useState<boolean>(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [recordedSuccess, setRecordedSuccess] = useState<boolean>(false);
-
-  // Reset the form each time the modal opens for a (possibly different) order
+interface Props { order: BespokeJobOrder | null; isOpen: boolean; onClose: () => void; onPaymentRecorded: (order: BespokeJobOrder) => void }
+export function RecordPaymentModal({ order, isOpen, onClose, onPaymentRecorded }: Props) {
+  const [current, setCurrent] = useState<BespokeJobOrder | null>(null);
+  const [amount, setAmount] = useState('');
+  const [method, setMethod] = useState(PAYMENT_METHODS[0]);
+  const [date, setDate] = useState(todayGhana());
+  const [reference, setReference] = useState('');
+  const [notes, setNotes] = useState('');
+  const [allowCredit, setAllowCredit] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<BespokeJobOrder | null>(null);
+  const submission = useRef('');
+  const id = order?.id;
   useEffect(() => {
-    if (isOpen && order) {
-      setPaymentMethod('Cash in Atelier');
-      setAmountPaid(Math.max(0, order.totalAmount - order.depositPaid));
-      setPaymentNotes('Paid at Osu studio reception.');
-      setIsRecording(false);
-      setErrorMessage(null);
-      setRecordedSuccess(false);
-    }
-  }, [order?.id, isOpen]);
-
+    if (!isOpen || !id) return;
+    let active = true;
+    setLoading(true); setError(null); setSaved(null); setCurrent(null); setBusy(false);
+    setMethod(PAYMENT_METHODS[0]); setDate(todayGhana()); setReference(''); setNotes(''); setAllowCredit(false);
+    submission.current = crypto.randomUUID();
+    fetchOrder(id).then((fresh) => {
+      if (active) { setCurrent(fresh); setAmount(orderBalance(fresh).due.toFixed(2)); }
+    }).catch((err) => { if (active) setError(err.message); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [id, isOpen]);
   if (!isOpen || !order) return null;
-
-  const currentBalance = Math.max(0, order.totalAmount - order.depositPaid);
-
-  const paymentMethods = [
-    'Cash in Atelier',
-    'In-Store POS / Card',
-    'Direct Bank Transfer',
-    'Direct MoMo',
-  ];
-
-  const calculatedNewDeposit = order.depositPaid + (Number(amountPaid) || 0);
-  const calculatedRemainingBalance = Math.max(0, order.totalAmount - calculatedNewDeposit);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage(null);
-
-    if (amountPaid <= 0) {
-      setErrorMessage('Payment amount must be greater than zero GHS.');
-      return;
-    }
-
-    setIsRecording(true);
-
+  const balance = current ? orderBalance(current) : { due: 0, credit: 0 };
+  const proposed = current ? orderBalance({ totalAmount: current.totalAmount, depositPaid: current.depositPaid + Number(amount || 0) }) : balance;
+  const inputClass = 'w-full rounded-xl border border-gray-200 bg-white p-3 text-sm focus:outline-none focus:ring-2 focus:ring-mustard-400';
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!current || busy) return;
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) { setError('Enter a positive payment amount.'); return; }
+    setBusy(true); setError(null);
     try {
-      const newDeposit = order.depositPaid + amountPaid;
-      const historyEntry = {
-        stage: order.stage,
-        completedAt: new Date().toISOString(),
-        completedBy: 'Reception',
-        notes: `Payment of GHS ${amountPaid.toFixed(2)} recorded via ${paymentMethod}. ${paymentNotes ? `Notes: ${paymentNotes}` : ''}`,
-      };
-
-      const updatedOrder: BespokeJobOrder = {
-        ...order,
-        depositPaid: newDeposit,
-        stageHistory: [...order.stageHistory, historyEntry],
-      };
-
-      // 1. Save to Offline Cache
-      saveOfflineJobCard(updatedOrder);
-
-      // 2. Commit to Supabase Database
-      try {
-        const { error } = await (supabase.from('orders') as any)
-          .update({
-            deposit_paid: newDeposit,
-            stage_history: updatedOrder.stageHistory,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', order.id);
-        if (error) console.error('[RecordPaymentModal] Payment update failed:', error);
-      } catch (err) {
-        console.error('[RecordPaymentModal] Payment update threw:', err);
-      }
-
-      onPaymentRecorded(updatedOrder);
-      setRecordedSuccess(true);
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsRecording(false);
-    }
-  };
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={`Payment // #${order.id}`}
-      subtitle="Financial settlement & receipt console"
-      icon={<Receipt size={17} className="text-accent-800" />}
-      maxWidth="max-w-md"
-    >
-      <div className="p-6 space-y-5">
-        {recordedSuccess ? (
-          <div className="p-6 text-center glass rounded-3xl border border-emerald-300 space-y-4 animate-in fade-in">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center mx-auto shadow-sm">
-              <CheckCircle2 size={30} />
-            </div>
-            <div>
-              <h4 className="text-xl font-semibold text-accent-950 font-display">Payment Recorded</h4>
-              <p className="text-xs text-gray-500 font-sans mt-1">
-                GHS {amountPaid.toFixed(2)} received via {paymentMethod}.
-              </p>
-            </div>
-
-            <div className="p-3.5 bg-gold-50/80 border border-gold-500/25 rounded-2xl text-xs font-mono">
-              <span className="text-gray-500 font-sans">Remaining Balance:</span>
-              <span className="font-bold text-accent-950 ml-1.5 text-sm">GHS {calculatedRemainingBalance.toFixed(2)}</span>
-            </div>
-
-            <div className="pt-2 flex flex-wrap justify-center gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  const waMsg = formatWhatsAppPaymentReceipt(order, amountPaid, paymentMethod);
-                  openWhatsAppChat(order.clientPhone, waMsg);
-                }}
-                className="px-4 py-2.5 bg-[#25D366] hover:bg-[#1EBE5D] text-white rounded-xl text-xs font-semibold transition-all shadow-sm flex items-center gap-2"
-              >
-                <MessageCircle size={15} />
-                <span>Send WhatsApp Receipt</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2.5 bg-gradient-to-r from-accent-800 to-accent-600 hover:from-accent-700 text-white rounded-xl text-xs font-semibold transition-all shadow-sm"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="p-4 glass rounded-2xl border border-gold-500/20 grid grid-cols-3 gap-2 text-center text-xs">
-              <div>
-                <span className="text-gray-400 block text-[10px] uppercase tracking-wider">Total</span>
-                <span className="font-semibold text-gray-900 text-sm font-mono">GHS {order.totalAmount.toFixed(0)}</span>
-              </div>
-              <div>
-                <span className="text-gray-400 block text-[10px] uppercase tracking-wider">Paid</span>
-                <span className="font-semibold text-emerald-800 text-sm font-mono">GHS {order.depositPaid.toFixed(0)}</span>
-              </div>
-              <div>
-                <span className="text-gray-400 block text-[10px] uppercase tracking-wider">Due</span>
-                <span className="font-semibold text-accent-900 text-sm font-mono">GHS {currentBalance.toFixed(0)}</span>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wider">Payment Method</label>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                {paymentMethods.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setPaymentMethod(m)}
-                    className={`p-2.5 rounded-xl border text-left font-semibold transition-all ${
-                      paymentMethod === m
-                        ? 'bg-gradient-to-r from-accent-800 to-accent-950 text-gold-300 border-gold-500/40 shadow-sm'
-                        : 'glass text-gray-700 hover:bg-gold-50/60 border-gray-200/80'
-                    }`}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1 tracking-wide">Amount Received (GHS) *</label>
-              <div className="relative">
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  required
-                  value={amountPaid}
-                  onChange={(e) => setAmountPaid(parseFloat(e.target.value) || 0)}
-                  className="w-full bg-white/90 border border-gray-200/90 rounded-xl p-2.5 pl-9 text-xs sm:text-sm font-bold font-mono text-gray-900 focus:outline-none focus:ring-2 focus:ring-gold-500/30 focus:border-gold-500 shadow-sm transition-all"
-                />
-                <DollarSign size={14} className="absolute left-3 top-3 text-gold-700" />
-              </div>
-            </div>
-
-            <div className="p-3.5 bg-gold-50/70 border border-gold-500/20 rounded-xl text-xs flex justify-between items-center font-mono">
-              <span className="text-gray-600 font-sans">Remaining balance after payment:</span>
-              <span className={`font-bold ${calculatedRemainingBalance === 0 ? 'text-emerald-800 font-sans' : 'text-accent-900'}`}>
-                GHS {calculatedRemainingBalance.toFixed(2)}
-                {calculatedRemainingBalance === 0 && ' (Settled)'}
-              </span>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1 tracking-wide">Reference / Receipt Notes</label>
-              <input
-                type="text"
-                value={paymentNotes}
-                onChange={(e) => setPaymentNotes(e.target.value)}
-                placeholder="e.g. In-store POS terminal auth #89421"
-                className="w-full bg-white/90 border border-gray-200/90 rounded-xl p-2.5 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-gold-500/30 focus:border-gold-500 shadow-sm transition-all"
-              />
-            </div>
-
-            {errorMessage && (
-              <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl text-xs flex items-center gap-2">
-                <AlertCircle size={15} className="shrink-0" />
-                <span>{errorMessage}</span>
-              </div>
-            )}
-
-            <div className="pt-2 flex justify-end gap-2.5 border-t border-gray-200/80">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-gray-600 hover:bg-gray-100 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isRecording}
-                className="px-5 py-2.5 bg-gradient-to-r from-accent-800 to-accent-600 hover:from-accent-700 text-white font-semibold text-xs rounded-xl shadow-md shadow-accent-900/15 transition-all flex items-center gap-2"
-              >
-                {isRecording ? (
-                  <>
-                    <Loader2 size={14} className="animate-spin text-gold-300" />
-                    <span>Recording...</span>
-                  </>
-                ) : (
-                  <>
-                    <CreditCard size={14} className="text-gold-300" />
-                    <span>Record Payment</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
-    </Modal>
-  );
-};
-
-export default RecordPaymentModal;
+      const confirmed = await recordPayment(current, { submissionKey: submission.current, amount: Number(amount), method,
+        date, reference: reference.trim(), notes: notes.trim(), allowCredit });
+      saveOfflineJobCard(confirmed); setSaved(confirmed); setCurrent(confirmed); onPaymentRecorded(confirmed);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not confirm this payment. Review the ledger before recording another.'); }
+    finally { setBusy(false); }
+  }
+  return <Modal isOpen={isOpen} onClose={onClose} title="Record payment" subtitle={order.clientName}
+    icon={<Receipt size={18} />} maxWidth="max-w-xl">
+    <div className="p-6 space-y-4">
+      {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+      {loading ? <p className="text-sm">Loading current ledger…</p> : saved ? <div className="space-y-4" role="status">
+        <h3 className="font-semibold text-emerald-800">Payment recorded</h3>
+        <p className="text-sm">{formatGhs(Number(amount))} · {method} · {date}</p>
+        <p className="text-sm font-semibold">{orderBalance(saved).credit ? `Customer credit: ${formatGhs(orderBalance(saved).credit)}` : `Balance due: ${formatGhs(orderBalance(saved).due)}`}</p>
+        <button onClick={onClose} className="rounded-xl bg-charcoal-950 text-white px-5 py-3 text-sm">Close</button>
+      </div> : current && <form onSubmit={submit} className="space-y-4">
+        <div className="grid grid-cols-3 gap-2 text-xs rounded-xl bg-mustard-50 p-4">
+          <div>Total<p className="font-semibold mt-1">{formatGhs(current.totalAmount)}</p></div>
+          <div>Paid<p className="font-semibold mt-1">{formatGhs(current.depositPaid)}</p></div>
+          <div>{balance.credit ? 'Credit' : 'Due'}<p className="font-semibold mt-1">{formatGhs(balance.credit || balance.due)}</p></div>
+        </div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <label className="text-xs font-semibold space-y-1" htmlFor="payment-amount">Amount received (GHS)
+            <input id="payment-amount" type="number" required min="0.01" step="0.01" value={amount} disabled={busy}
+              onChange={(event) => setAmount(event.target.value)} className={inputClass} /></label>
+          <label className="text-xs font-semibold space-y-1" htmlFor="payment-date">Receipt date (Ghana)
+            <input id="payment-date" type="date" required max={todayGhana()} value={date} disabled={busy}
+              onChange={(event) => setDate(event.target.value)} className={inputClass} /></label>
+        </div>
+        <div className="space-y-1"><label className="block text-xs font-semibold" htmlFor="payment-method">Payment method</label>
+          <select id="payment-method" value={method} disabled={busy} onChange={(event) => setMethod(event.target.value)} className={inputClass}>
+            {PAYMENT_METHODS.map((item) => <option key={item}>{item}</option>)}
+          </select></div>
+        <label className="block text-xs font-semibold space-y-1" htmlFor="payment-reference">Receipt / transaction reference
+          <input id="payment-reference" value={reference} disabled={busy} onChange={(event) => setReference(event.target.value)} className={inputClass} /></label>
+        <label className="block text-xs font-semibold space-y-1" htmlFor="payment-notes">Notes
+          <textarea id="payment-notes" rows={2} value={notes} disabled={busy} onChange={(event) => setNotes(event.target.value)} className={inputClass} /></label>
+        <p className="text-sm">After recording: {proposed.credit ? `customer credit ${formatGhs(proposed.credit)}` : `balance due ${formatGhs(proposed.due)}`}</p>
+        {proposed.credit > 0 && <label className="flex items-start gap-2 p-3 rounded-xl bg-amber-50 text-sm">
+          <input type="checkbox" checked={allowCredit} required disabled={busy} onChange={(event) => setAllowCredit(event.target.checked)} className="mt-1" />
+          I confirm the excess payment should be recorded as customer credit.
+        </label>}
+        <button disabled={busy} className="w-full rounded-xl bg-charcoal-950 text-white p-3 text-sm font-semibold disabled:opacity-50">{busy ? 'Recording…' : 'Record payment'}</button>
+      </form>}
+    </div>
+  </Modal>;
+}

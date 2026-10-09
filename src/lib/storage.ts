@@ -1,7 +1,6 @@
 import { supabase } from './supabase';
 
 const ORDER_SKETCHES_BUCKET = 'order-sketches';
-const INVOICES_BUCKET = 'invoices';
 
 function sanitizeFileName(fileName: string): string {
   const lastDot = fileName.lastIndexOf('.');
@@ -11,9 +10,7 @@ function sanitizeFileName(fileName: string): string {
 
 /**
  * Uploads one intake reference sketch/photo for an order and returns its
- * public URL for storage in `orders.reference_images`. Bucket is public, so
- * the URL works directly in <img> tags and WhatsApp links with no signed-URL
- * refresh logic.
+ * storage path for storage in `orders.reference_images`. Staff reads use short-lived signed URLs.
  */
 export async function uploadOrderSketch(orderId: string, file: File): Promise<string> {
   const path = `${orderId}/${sanitizeFileName(file.name)}`;
@@ -23,24 +20,16 @@ export async function uploadOrderSketch(orderId: string, file: File): Promise<st
   });
   if (error) throw error;
 
-  const { data } = supabase.storage.from(ORDER_SKETCHES_BUCKET).getPublicUrl(path);
-  return data.publicUrl;
+  return path;
 }
 
-/**
- * Uploads a generated invoice PDF (as a Blob from jsPDF) and returns its
- * public URL — used for the "share via WhatsApp" link, since wa.me deep
- * links can only carry text, not an attached file.
- */
-export async function uploadInvoicePdf(orderId: string, pdfBlob: Blob): Promise<string> {
-  const path = `${orderId}/invoice-${Date.now()}.pdf`;
-  const { error } = await supabase.storage.from(INVOICES_BUCKET).upload(path, pdfBlob, {
-    cacheControl: '3600',
-    upsert: false,
-    contentType: 'application/pdf',
-  });
+export async function resolveOrderSketchUrl(value: string): Promise<string> {
+  const publicMarker = '/storage/v1/object/public/order-sketches/';
+  const signedMarker = '/storage/v1/object/sign/order-sketches/';
+  const marker = value.includes(publicMarker) ? publicMarker : value.includes(signedMarker) ? signedMarker : null;
+  const path = marker ? decodeURIComponent(value.split(marker)[1].split('?')[0]) : value;
+  if (!marker && /^https?:\/\//.test(value)) return value;
+  const { data, error } = await supabase.storage.from(ORDER_SKETCHES_BUCKET).createSignedUrl(path, 3600);
   if (error) throw error;
-
-  const { data } = supabase.storage.from(INVOICES_BUCKET).getPublicUrl(path);
-  return data.publicUrl;
+  return data.signedUrl;
 }
