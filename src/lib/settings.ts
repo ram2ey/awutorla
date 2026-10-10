@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { api } from './api';
 
 export interface AppSettings {
   business_name: string;
@@ -18,7 +18,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
  * Reads business settings for signed-in staff; writable by admins only.
  */
 export async function fetchAppSettings(): Promise<AppSettings> {
-  const { data, error } = await supabase.from('app_settings').select('key, value');
+  const { data, error } = await api.from('app_settings').select('key, value');
   if (error) throw error;
 
   const settings: AppSettings = { ...DEFAULT_APP_SETTINGS };
@@ -33,7 +33,7 @@ export async function fetchAppSettings(): Promise<AppSettings> {
 
 export async function updateAppSetting(key: keyof AppSettings, value: string): Promise<void> {
   if (key === 'currency' && value !== 'GHS') throw new Error('Workshop currency is fixed to GHS.');
-  const { error } = await (supabase.from('app_settings') as any).upsert(
+  const { error } = await (api.from('app_settings') as any).upsert(
     { key, value, updated_at: new Date().toISOString() },
     { onConflict: 'key' }
   );

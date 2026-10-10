@@ -1,5 +1,12 @@
 # Implementation review — phases 1–6 in manual mode
 
+Hosting update, 10 October 2026: the app now uses a native Node.js API, ordinary
+PostgreSQL, staff session cookies and private upload storage. See
+[COOLIFY.md](COOLIFY.md). Supabase deployment instructions below are historical;
+no Supabase service is required by the new container. Native backend tests cover
+authentication, permissions, SQL operations and private files. No hosted data has
+been migrated or live server deployed by this change.
+
 Reviewed 9 October 2026. The code and migration are implemented locally. No live
 database migration, production deployment, real payment transaction or SMS was made.
 

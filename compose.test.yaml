@@ -1,0 +1,8 @@
+# Test-only override; never add this to a public production deployment.
+services:
+  app:
+    environment:
+      NODE_ENV: development
+      APP_ORIGIN: http://127.0.0.1:3000
+    ports:
+      - "127.0.0.1:3000:3000"

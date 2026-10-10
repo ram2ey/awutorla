@@ -4,13 +4,19 @@ Staff-only management for a Ghanaian bespoke tailoring workshop. Customers are
 independent records, not login accounts. Progress SMS and payments are recorded
 manually. No Hubtel account or SMS provider credentials are required.
 
-React + TypeScript + Vite + Tailwind, with Supabase Postgres, Auth and private Storage.
+React + TypeScript + Vite + Tailwind, with a Node.js API, ordinary PostgreSQL,
+staff session cookies and private uploads. Deploy on Hetzner using Coolify.
+See [the Coolify deployment guide](docs/COOLIFY.md) for exact settings.
 
 ## Development
 
 ```bash
-npm install
-cp .env.example .env.local
+npm ci
+cp .env.example .env
+# Set a dedicated local DATABASE_URL and initial admin credentials in .env.
+# Terminal 1: backend (initializes an empty database)
+npm run dev:server
+# Terminal 2: frontend at http://localhost:5173
 npm run dev
 npm test
 npm run lint
@@ -74,10 +80,11 @@ number. Staff manage orders and master measurements from Clients or the dashboar
 
 ## Migration and deployment
 
-For a new database, apply migrations 01 through 08 in order. For an existing one,
-apply only migrations not already applied. Historical migrations are not a reset
-script. Back up the database before the migration and review its preservation notes.
-Deploy the frontend only after the new schema is installed.
+For a new database, the backend creates native support schemas and applies
+migrations 01–08 automatically. It records checksums and never reapplies them on
+restart. Historical migrations are not a reset script. Existing workshop tables
+without native migration history need a reviewed data import. Back up before
+schema changes and review the preservation notes below.
 
 Migration **05** separates customer records from auth profiles, preserves IDs and
 relationships, blocks legacy client access and makes workshop files private.
@@ -106,31 +113,18 @@ Attachment URLs renew when opening a card, returning focus and every 45 minutes
 while it is open. The Fabric & Specs tab also provides a refresh control. The service
 worker caches the shell and hashed assets; HTML uses the latest deployment first.
 
-Deploy the active staff account function:
+The Dockerfile builds the frontend and runs the Node API on port 3000. Configure
+`DATABASE_URL` and the HTTPS `APP_ORIGIN` as runtime settings in Coolify. Add
+persistent storage at `/app/uploads`; PostgreSQL needs its own volume and backups.
+Set the initial admin credentials once, then remove the bootstrap password after
+login. Staff passwords use salted scrypt hashes; sessions use revocable HttpOnly
+cookies. Admins issue temporary passwords from the team screen. No SMTP is required.
 
-```bash
-supabase functions deploy create-staff-account
-```
-
-Retire previously deployed endpoints using the included HTTP 410 handlers (or delete
-those functions from the deployment). Source removal alone does not retire a live
-function. This includes the previous automatic SMS sender:
-
-```bash
-supabase functions deploy create-walkin-client --no-verify-jwt
-supabase functions deploy resend-access-code --no-verify-jwt
-supabase functions deploy track-order --no-verify-jwt
-supabase functions deploy advance-order --no-verify-jwt
-```
-
-Disable public signup in Supabase Auth. Create the first admin through the Supabase
-dashboard and set their profile role through the SQL editor. New staff roles use
-server-controlled app metadata; user signup metadata cannot grant staff access.
-
-The configured Vercel project builds with `npm run build` and serves `dist`.
-Frontend variables: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`. Never put a service
-role key or provider secret in frontend variables. Retire any prior deployed build
-alongside the backend change so staff use the new recording workflow.
+Historical SQL remains in `supabase/migrations`; its auth/storage schemas are now
+owned by the app. No Supabase service is needed. Old Edge Function source is not
+shipped in the native production image. If retiring an existing Supabase deployment,
+disable its previous client APIs and automatic sender after migrating its data;
+changing the frontend cannot disable an external service.
 
 After deployment, verify staff login, denial for legacy client accounts, intake with
 a deposit, two separately recorded payments, correction permissions, unchanged
@@ -141,16 +135,18 @@ deletion denial. Test the Storage deletion trigger with a disposable upload firs
 
 ## Validation and local UI fixtures
 
-`npm test` includes real PostgreSQL migration/permission/transaction checks via
-PGlite and focused manual workflow/reporting checks. Hosted Supabase Auth, Storage,
-PostgREST joins and Realtime still require the deployment smoke test above.
+`npm test` includes PostgreSQL migration/permission/transaction checks via PGlite,
+manual workflow/reporting checks and native backend HTTP integration tests.
+GitHub CI builds the Docker image and tests actual PostgreSQL through the production
+driver, including upload/database persistence after restart.
+`npm run test:container -- https://your-app-domain` is a read-only HTTP check.
+Docker is required for the full container check; follow [docs/COOLIFY.md](docs/COOLIFY.md).
 
-`scripts/preview-manual-ui.ts` is an isolated loopback fixture server for UI testing.
-It has fake authentication, records and phone numbers and must never be deployed.
-Run it with `npx tsx scripts/preview-manual-ui.ts`, then run Vite with process-local
-`VITE_SUPABASE_URL=http://127.0.0.1:54329` and `VITE_SUPABASE_ANON_KEY=local-ui-test-key`.
-Use the test login printed by that server. Do not replace your real `.env.local`
-configuration with fixture values.
+For UI development without a PostgreSQL installation, run
+`node scripts/preview-postgres-ui.mjs` and `npm run dev` in separate terminals.
+Open `http://localhost:5173` and use the fake login printed by the fixture server.
+It uses an isolated in-memory PostgreSQL database, never your `DATABASE_URL`, and
+is excluded from the production image. Stop it before starting the real backend.
 
 See [docs/REASSESSMENT.md](docs/REASSESSMENT.md) for completed findings and remaining work.
 

@@ -21,7 +21,7 @@ export function AuthScreen() {
     try {
       const result = reset ? await sendPasswordReset(email.trim()) : await signIn(email.trim(), password);
       if (result.error) setError(result.error);
-      else if (reset) setMessage('If this email has a staff account, a password reset link has been sent.');
+      else if (reset) setMessage('Ask a workshop admin for a temporary password.');
     } catch {
       setError('Could not reach the sign-in service. Please try again.');
     } finally {
@@ -35,6 +35,7 @@ export function AuthScreen() {
       <h1 className="text-xl font-semibold">{reset ? 'Reset staff password' : 'Staff sign in'}</h1>
       <p className="text-xs text-gray-500">Atelier staff and administrators</p>
     </div>
+    {reset && <p className="text-xs text-gray-600 mb-4">Ask a workshop admin to reset your password in Settings → Tailors &amp; Team. Sign in with the temporary password, then choose a new password.</p>}
     <form onSubmit={submit} className="space-y-4">
       <div>
         <label htmlFor="staff-email" className="block text-xs font-semibold mb-1">Email</label>
@@ -48,9 +49,9 @@ export function AuthScreen() {
       </div>}
       {error && <p role="alert" className="text-xs text-rose-700 bg-rose-50 rounded-xl p-3">{error}</p>}
       {message && <p role="status" className="text-xs text-emerald-800 bg-emerald-50 rounded-xl p-3">{message}</p>}
-      <button disabled={busy} className="w-full bg-charcoal-950 text-white rounded-xl p-3 text-sm font-semibold disabled:opacity-50">
-        {busy ? 'Please wait…' : reset ? 'Send reset link' : 'Sign in'}
-      </button>
+      {!reset && <button disabled={busy} className="w-full bg-charcoal-950 text-white rounded-xl p-3 text-sm font-semibold disabled:opacity-50">
+        {busy ? 'Please wait…' : 'Sign in'}
+      </button>}
       <button type="button" onClick={() => { setReset(!reset); setError(null); setMessage(null); }}
         className="w-full text-xs text-gray-600 underline">
         {reset ? 'Back to staff sign in' : 'Forgot password?'}

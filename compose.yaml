@@ -1,0 +1,38 @@
+# Self-contained local/server alternative. For Coolify's standalone PostgreSQL
+# resource, use the Dockerfile and its private connection URL instead.
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      APP_ORIGIN: ${APP_ORIGIN:?Set the public app origin}
+      DATABASE_URL: postgresql://atelier:${POSTGRES_PASSWORD:?Set a database password}@postgres:5432/atelier
+      UPLOAD_DIR: /app/uploads
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-Workshop Admin}
+    expose:
+      - "3000"
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: atelier
+      POSTGRES_USER: atelier
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a database password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atelier -d atelier"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+volumes:
+  postgres-data:
+  uploads:

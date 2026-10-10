@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { api } from './api';
 import { readAllRows } from './queryRows';
 export interface Fitting {
   id: string; order_id: string; tailor_id: string; starts_at: string; duration_minutes: number;
@@ -9,11 +9,11 @@ export interface Quality { id: string; work_revision: number; notes: string; che
 export interface Audit { id: string; event: string; actor_name: string; recorded_at: string; details: Record<string, any> }
 export async function fetchOperations(orderId: string) {
   const records = await Promise.all(['fitting_appointments','order_rework','order_quality_checks','order_audit'].map((table) =>
-    readAllRows((supabase as any).from(table).select('*').eq('order_id',orderId).order('id'))));
+    readAllRows((api as any).from(table).select('*').eq('order_id',orderId).order('id'))));
   return { fittings: records[0] as Fitting[], rework: records[1] as Rework[], quality: records[2] as Quality[], audit: records[3] as Audit[] };
 }
 export async function workshopOperation(name: string, args: Record<string, unknown>) {
-  const { data, error } = await (supabase as any).rpc(name,args);
+  const { data, error } = await (api as any).rpc(name,args);
   if (error) throw new Error(error.message || 'Could not confirm this workshop change. Refresh before trying again.');
   return data;
 }

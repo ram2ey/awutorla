@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { workshopOperation } from '../../lib/workshopOperations';
-import { supabase } from '../../lib/supabase';
+import { api } from '../../lib/api';
 import { ghanaTime } from '../../lib/workshopOperations';
 export function AbandonedUploads() {
   const [files,setFiles]=useState<{path:string;createdAt:string}[]>([]);const [loaded,setLoaded]=useState(false);
@@ -8,8 +8,8 @@ export function AbandonedUploads() {
   async function load(){setBusy(true);setError('');try{setFiles(await workshopOperation('abandoned_sketches',{}));setLoaded(true);}catch(err){setError(err instanceof Error ? err.message : 'Could not load uploads.');}finally{setBusy(false);}}
   async function remove(path:string){setBusy(true);setError('');try{
     // RLS and a storage-row trigger recheck age and committed references at deletion.
-    const {data,error:failed}=await supabase.storage.from('order-sketches').remove([path]);
-    if(failed)throw failed;if(!data?.some(file=>file.name===path || file.name===path.split('/').pop()))throw new Error('Deletion was not confirmed. The file may now belong to a saved order. Refresh the list.');
+    const {data,error:failed}=await api.storage.from('order-sketches').remove([path]);
+    if(failed)throw failed;if(!data?.some((file:{name:string})=>file.name===path || file.name===path.split('/').pop()))throw new Error('Deletion was not confirmed. The file may now belong to a saved order. Refresh the list.');
     setConfirm(null);await load();
   }catch(err){setError(err instanceof Error ? err.message : 'Could not delete this upload. Refresh first.');}finally{setBusy(false);}}
   return <div className="space-y-4"><p className="text-sm">Review unused intake images older than 48 hours. Files referenced by saved orders are excluded and protected from deletion.</p>

@@ -5,21 +5,25 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:server": "node --env-file=.env --watch server/index.mjs",
+    "start": "node server/index.mjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "npm run test:hubtel && npm run test:workshop && npm run test:intake && npm run test:manual-payment && npm run test:schema && npm run test:sms && npm run test:database",
+    "test": "npm run test:hubtel && npm run test:workshop && npm run test:intake && npm run test:manual-payment && npm run test:schema && npm run test:sms && npm run test:database && npm run test:backend",
     "test:hubtel": "tsx scripts/run-tests.ts",
     "test:workshop": "tsx scripts/run-workshop-tests.ts",
     "test:intake": "tsx scripts/run-intake-tests.ts",
     "test:manual-payment": "tsx scripts/run-manual-payment-tests.ts",
     "test:schema": "tsx scripts/run-schema-tests.ts",
     "test:sms": "tsx scripts/run-manual-workflow-tests.ts",
-    "test:database": "tsx scripts/run-database-tests.ts"
+    "test:database": "tsx scripts/run-database-tests.ts",
+    "test:container": "node scripts/smoke-container.mjs",
+    "test:backend": "node --test server/tests/backend.test.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.112.2",
     "jspdf": "^4.2.1",
+    "pg": "^8.23.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

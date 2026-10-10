@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { api } from './api';
 
 export interface StaffMember {
   id: string;
@@ -6,7 +6,7 @@ export interface StaffMember {
 }
 
 export async function fetchStaffMembers(): Promise<StaffMember[]> {
-  const { data, error } = await supabase.from('profiles')
+  const { data, error } = await api.from('profiles')
     .select('id, full_name').in('role', ['tailor', 'admin']).order('full_name');
   if (error) throw error;
   return (data || []) as StaffMember[];

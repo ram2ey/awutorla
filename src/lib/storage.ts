@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { api } from './api';
 
 const ORDER_SKETCHES_BUCKET = 'order-sketches';
 
@@ -14,7 +14,7 @@ function sanitizeFileName(fileName: string): string {
  */
 export async function uploadOrderSketch(orderId: string, file: File): Promise<string> {
   const path = `${orderId}/${sanitizeFileName(file.name)}`;
-  const { error } = await supabase.storage.from(ORDER_SKETCHES_BUCKET).upload(path, file, {
+  const { error } = await api.storage.from(ORDER_SKETCHES_BUCKET).upload(path, file, {
     cacheControl: '3600',
     upsert: false,
   });
@@ -29,7 +29,7 @@ export async function resolveOrderSketchUrl(value: string): Promise<string> {
   const marker = value.includes(publicMarker) ? publicMarker : value.includes(signedMarker) ? signedMarker : null;
   const path = marker ? decodeURIComponent(value.split(marker)[1].split('?')[0]) : value;
   if (!marker && /^https?:\/\//.test(value)) return value;
-  const { data, error } = await supabase.storage.from(ORDER_SKETCHES_BUCKET).createSignedUrl(path, 3600);
+  const { data, error } = await api.storage.from(ORDER_SKETCHES_BUCKET).createSignedUrl(path, 3600);
   if (error) throw error;
   return data.signedUrl;
 }

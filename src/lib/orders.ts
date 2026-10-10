@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { api } from './api';
 import { resolveOrderSketchUrl } from './storage';
 import { mapPaymentRow } from './payments';
 import { readAllRows } from './queryRows';
@@ -19,7 +19,7 @@ export function applyOrderRecord(order: BespokeJobOrder, row: any, payments = or
     assignedTailor: row.assigned_tailor ?? order.assignedTailor, assignedTailorId: row.assigned_tailor_id ?? order.assignedTailorId };
 }
 export async function fetchAllOrders(orderId?: string, orderIds?: string[], clientId?: string): Promise<BespokeJobOrder[]> {
-  let query = supabase.from('orders').select('*').order('created_at', { ascending: false }).order('id');
+  let query = api.from('orders').select('*').order('created_at', { ascending: false }).order('id');
   if (orderId) query = query.eq('id', orderId);
   if (orderIds) { if (!orderIds.length) return []; query = query.in('id',orderIds); }
   if (clientId) query = query.eq('client_id',clientId);
@@ -31,8 +31,8 @@ export async function fetchAllOrders(orderId?: string, orderIds?: string[], clie
   for (let offset = 0; offset < ids.length; offset += 50) {
     const chunk = ids.slice(offset, offset + 50);
     const [tasks, payments] = await Promise.all([
-      readAllRows(supabase.from('order_tasks').select('*').in('order_id', chunk).order('id')),
-      readAllRows((supabase.from('payments') as any).select('*, staff:profiles!payments_recorded_by_fkey(full_name)').in('order_id', chunk).order('recorded_at').order('id')),
+      readAllRows(api.from('order_tasks').select('*').in('order_id', chunk).order('id')),
+      readAllRows((api.from('payments') as any).select('*, staff:profiles!payments_recorded_by_fkey(full_name)').in('order_id', chunk).order('recorded_at').order('id')),
     ]);
     taskRows.push(...tasks); paymentRows.push(...payments);
   }
@@ -75,9 +75,9 @@ export async function fetchOrder(id: string) {
   return orders[0];
 }
 export function subscribeToOrderChanges(onChange: () => void): () => void {
-  const channel = supabase.channel('workshop-orders-sync')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, onChange)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'order_tasks' }, onChange)
-    .subscribe();
-  return () => { supabase.removeChannel(channel); };
+  const refresh=()=>{if(navigator.onLine && document.visibilityState==='visible')onChange();};
+  const timer=window.setInterval(refresh,15000);
+  window.addEventListener('focus',refresh);
+  window.addEventListener('online',refresh);
+  return ()=>{window.clearInterval(timer);window.removeEventListener('focus',refresh);window.removeEventListener('online',refresh);};
 }

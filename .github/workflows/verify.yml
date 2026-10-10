@@ -1,0 +1,46 @@
+name: Verify app and PostgreSQL container
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      APP_ORIGIN: http://127.0.0.1:3000
+      POSTGRES_PASSWORD: ci-only-disposable-database-123
+      BOOTSTRAP_ADMIN_EMAIL: admin@atelier.test
+      BOOTSTRAP_ADMIN_PASSWORD: ci-only-temporary-password-123
+      ALLOW_DISPOSABLE_SMOKE_TEST: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run lint
+      - run: npm test
+      - name: Build and start actual PostgreSQL and app containers
+        run: docker compose -f compose.yaml -f compose.test.yaml up --build -d --wait --wait-timeout 180
+      - run: npm run test:container
+      - name: Check native login and transactional intake against PostgreSQL
+        run: node scripts/smoke-postgres.mjs
+      - name: Restart app and verify persistent database and uploads
+        run: |
+          docker compose -f compose.yaml -f compose.test.yaml restart app
+          docker compose -f compose.yaml -f compose.test.yaml up -d --wait --wait-timeout 120
+          node scripts/smoke-postgres.mjs --verify-persistence
+      - name: Container logs on failure
+        if: failure()
+        run: docker compose -f compose.yaml -f compose.test.yaml logs --no-color --tail=100
+      - name: Clean disposable test containers
+        if: always()
+        run: docker compose -f compose.yaml -f compose.test.yaml down -v

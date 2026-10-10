@@ -19,7 +19,7 @@ import {
 import type { BespokeJobOrder, WorkshopStage, OrderTaskItem, TaskStatus, MeasurementParameter } from '../../types/workshop.types';
 import { MeasurementSilhouette } from './MeasurementSilhouette';
 import { RecordPaymentModal } from './RecordPaymentModal';
-import { supabase } from '../../lib/supabase';
+import { api } from '../../lib/api';
 import { saveOfflineJobCard } from '../../lib/offlineStore';
 import { fetchMeasurementParameters } from '../../lib/measurementParameters';
 import { fetchAppSettings, DEFAULT_APP_SETTINGS } from '../../lib/settings';
@@ -161,7 +161,7 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
 
     setActionError(null);
     try {
-      const { error } = await (supabase.from('order_tasks') as any)
+      const { error } = await (api.from('order_tasks') as any)
         .update({
           status: nextStatus,
           completed_at: nextStatus === 'completed' ? new Date().toISOString() : null,
@@ -200,7 +200,7 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
     setActionError(null);
     if (user) {
       try {
-        const { error } = await (supabase.from('order_tasks') as any).insert({
+        const { error } = await (api.from('order_tasks') as any).insert({
           id: newTask.id,
           order_id: order.id,
           tailor_id: tailor.id,
@@ -247,7 +247,7 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
   const applyLatestMeasurements = async () => {
     setApplyingMeasurements(true); setActionError(null);
     try {
-      const { data, error } = await (supabase as any).rpc('apply_order_measurements', {
+      const { data, error } = await (api as any).rpc('apply_order_measurements', {
         p_order_id: order.id, p_expected_capture: order.measurements.capturedAt || null,
       });
       if (error) throw new Error(error.message);
@@ -259,7 +259,7 @@ export const DigitalJobCard: React.FC<DigitalJobCardProps> = ({
   const saveDueDate = async () => {
     setSavingDue(true); setActionError(null);
     try {
-      const { data, error } = await (supabase.from('orders') as any).update({ due_date: dueDraft })
+      const { data, error } = await (api.from('orders') as any).update({ due_date: dueDraft })
         .eq('id', order.id).eq('due_date', order.dueDate).select('*').single();
       if (error) throw new Error('Could not confirm this due date. Refresh the order before trying again.');
       const updated = applyOrderRecord(order, data); saveOfflineJobCard(updated); onOrderUpdated(updated);

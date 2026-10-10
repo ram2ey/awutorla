@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ClientBodyMeasurements, MeasurementParameter } from '../../types/workshop.types';
-import { supabase } from '../../lib/supabase';
+import { api } from '../../lib/api';
 import { fetchMeasurementParameters } from '../../lib/measurementParameters';
 import { cacheClientMeasurements, getOfflineMeasurements, getMeasurementDrafts, isOnline, saveMeasurementDraft } from '../../lib/offlineStore';
 
@@ -31,9 +31,9 @@ export function MeasurementVaultSync({ targetClientId }: { targetClientId: strin
       try {
         const [params, header, measurements, customer] = await Promise.all([
           fetchMeasurementParameters(),
-          supabase.from('client_measurements').select('*').eq('client_id', targetClientId).maybeSingle(),
-          supabase.from('client_measurement_values').select('value, measurement_parameters(key)').eq('client_id', targetClientId),
-          supabase.from('clients').select('full_name, phone_number').eq('id', targetClientId).maybeSingle(),
+          api.from('client_measurements').select('*').eq('client_id', targetClientId).maybeSingle(),
+          api.from('client_measurement_values').select('value, measurement_parameters(key)').eq('client_id', targetClientId),
+          api.from('clients').select('full_name, phone_number').eq('id', targetClientId).maybeSingle(),
         ]);
         if (header.error) throw header.error;
         if (measurements.error) throw measurements.error;
@@ -72,7 +72,7 @@ export function MeasurementVaultSync({ targetClientId }: { targetClientId: strin
       const args={p_client_id:targetClientId,p_expected_revision:revision,p_unit:unit,p_values:activeValues,p_notes:notes.trim()};
       const request=JSON.stringify(args);if(submission.current?.request!==request)submission.current={id:crypto.randomUUID(),request};
       if(retainDraft || !isOnline()){saveMeasurementDraft({id:submission.current.id,clientId:targetClientId,clientName,expectedRevision:revision,unit,values:activeValues,notes:notes.trim(),createdAt:new Date().toISOString()});setDraftSaved(true);return;}
-      const { data, error: saveError } = await (supabase as any).rpc('save_measurement_draft', {p_id:submission.current.id,...args});
+      const { data, error: saveError } = await (api as any).rpc('save_measurement_draft', {p_id:submission.current.id,...args});
       if (saveError) throw new Error(saveError.message || 'Could not confirm the save. Reload before trying again.');
       const confirmed = data as ClientBodyMeasurements;
       cacheClientMeasurements(targetClientId, {...confirmed,labels:Object.fromEntries(parameters.map(parameter=>[parameter.key,parameter.label]))}); setRevision(Number(confirmed.revision)); setValues(confirmed.values);

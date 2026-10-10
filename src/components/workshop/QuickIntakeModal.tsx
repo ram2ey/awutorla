@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import type { BespokeJobOrder, MeasurementParameter } from '../../types/workshop.types';
 import { sanitizeGhanaianPhoneNumber, detectGhanaNetwork } from '../../services/hubtel';
-import { supabase } from '../../lib/supabase';
+import { api } from '../../lib/api';
 import { saveOfflineJobCard, cacheClientMeasurements } from '../../lib/offlineStore';
 import { fetchMeasurementParameters } from '../../lib/measurementParameters';
 import { uploadOrderSketch } from '../../lib/storage';
@@ -193,7 +193,7 @@ export const QuickIntakeModal: React.FC<QuickIntakeModalProps> = ({
         total_amount: totalAmount, currency: 'GHS', unit, measurement_values: measurementValues,
         deposit_submission_key: depositKey, payment_method: paymentMethod, payment_date: paymentDate, payment_reference: paymentReference.trim(),
       };
-      const { error } = await (supabase as any).rpc('create_bespoke_intake', { p_payload: payload });
+      const { error } = await (api as any).rpc('create_bespoke_intake', { p_payload: payload });
       if (error) throw new Error(error.message || 'Could not save intake. Please try again.');
       persisted = true;
       const newOrder = await fetchOrder(id);

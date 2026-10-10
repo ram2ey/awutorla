@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getMeasurementDrafts,getAllOfflineJobCards,removeMeasurementDraft,cacheClientMeasurements,isOnline,listenNetworkStatus } from '../../lib/offlineStore';
 import { workshopOperation } from '../../lib/workshopOperations';
-import { supabase } from '../../lib/supabase';
+import { api } from '../../lib/api';
 import { formatGhs,orderBalance } from '../../lib/money';
 export function OfflineWorkspace() {
   const [online,setOnline]=useState(isOnline);const [revision,setRevision]=useState(0);
@@ -18,7 +18,7 @@ export function OfflineWorkspace() {
     } catch(err) {
       setError(err instanceof Error ? err.message : 'Draft was not confirmed.');
       try {
-        const [header,values]=await Promise.all([supabase.from('client_measurements').select('revision,unit').eq('client_id',draft.clientId).maybeSingle(),supabase.from('client_measurement_values').select('value,measurement_parameters(key)').eq('client_id',draft.clientId)]);
+        const [header,values]=await Promise.all([api.from('client_measurements').select('revision,unit').eq('client_id',draft.clientId).maybeSingle(),api.from('client_measurement_values').select('value,measurement_parameters(key)').eq('client_id',draft.clientId)]);
         if(!header.error && !values.error && header.data)setConflict({id,revision:Number((header.data as any).revision),unit:(header.data as any).unit,values:Object.fromEntries((values.data as any[]).map(row=>[row.measurement_parameters?.key,Number(row.value)]).filter(([key])=>key))});
       } catch { /* Retain the draft when the latest version cannot be read. */ }
     } finally{setBusy(null);setRevision(v=>v+1);}

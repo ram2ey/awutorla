@@ -1,35 +1,11 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Session, User } from '@supabase/supabase-js';
-import { FunctionsHttpError } from '@supabase/supabase-js';
-import { supabase } from './supabase';
+import type { Session, User } from './api';
+import { api } from './api';
 import { clearOfflineStore, setOfflineStoreOwner } from './offlineStore';
 import type { UserRole } from '../types/database.types';
 
-// supabase-js's functions.invoke() throws a generic FunctionsHttpError ("Edge Function
-// returned a non-2xx status code") for any non-2xx response — it does not surface the
-// error body. That body is usually our own function's `{ error: "..." }` JSON, but a
-// platform-level failure (e.g. the function was never deployed, or crashed on boot)
-// instead returns Supabase's own error shape, or plain text/HTML. Try each in turn so
-// callers see the most specific message available instead of the generic one.
 async function describeFunctionError(error: unknown, fallback: string): Promise<string> {
-  if (error instanceof FunctionsHttpError) {
-    try {
-      const text = await error.context.text();
-      if (text) {
-        try {
-          const body = JSON.parse(text);
-          if (body?.error) return String(body.error);
-          if (body?.message) return String(body.message);
-        } catch {
-          // Not JSON — fall through to the raw text below.
-        }
-        if (text.length < 300) return text;
-      }
-    } catch {
-      // Response body was unreadable — fall through to the generic message below.
-    }
-  }
   return error instanceof Error ? error.message : fallback;
 }
 
@@ -45,9 +21,7 @@ interface AuthContextValue {
   user: User | null;
   profile: AuthProfile | null;
   loading: boolean;
-  // True after the user opens a password-reset email link — the app should show the
-  // "set a new password" screen instead of its normal signed-in content until this
-  // resolves (Supabase treats the reset link as a real, though narrowly-scoped, session).
+  // Temporary passwords must be replaced before accessing workshop records.
   isPasswordRecovery: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   sendPasswordReset: (email: string) => Promise<{ error: string | null }>;
@@ -61,10 +35,7 @@ export interface StaffAccountResult {
 }
 
 /**
- * Creates a tailor/admin account via the create-staff-account Edge Function. Must be
- * called by a signed-in admin — the function itself re-checks this server-side. There
- * is no self-service staff signup: this (and the Team Roles panel that calls it) is
- * the only way a tailor/admin account comes into existence. Throws on failure.
+ * Creates a staff account through the admin-only app backend.
  */
 export async function createStaffAccount(
   fullName: string,
@@ -72,7 +43,7 @@ export async function createStaffAccount(
   role: Extract<UserRole, 'tailor' | 'admin'>,
   phone?: string
 ): Promise<StaffAccountResult> {
-  const { data, error } = await supabase.functions.invoke('create-staff-account', {
+  const { data, error } = await api.functions.invoke('create-staff-account', {
     body: { fullName, email, role, phone },
   });
   if (error) throw new Error(await describeFunctionError(error, 'Failed to create staff account.'));
@@ -93,16 +64,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let isMounted = true;
 
-    supabase.auth.getSession().then(({ data }) => {
+    api.auth.getSession().then(({ data }) => {
       if (!isMounted) return;
       setOfflineStoreOwner(data.session?.user.id ?? null);
       setSession(data.session);
+      setIsPasswordRecovery(!!data.session?.user.must_change_password);
       setLoading(false);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((event, newSession) => {
+    const { data: listener } = api.auth.onAuthStateChange((event, newSession) => {
       if (!isMounted) return;
-      if (event === 'PASSWORD_RECOVERY') setIsPasswordRecovery(true);
+      setIsPasswordRecovery(event === 'PASSWORD_RECOVERY' || !!newSession?.user.must_change_password);
       setOfflineStoreOwner(newSession?.user.id ?? null);
       if (!newSession) setIsPasswordRecovery(false);
       setSession(newSession);
@@ -120,7 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async function loadProfile(userId: string) {
       setProfile(null);
       try {
-        const { data, error } = await supabase
+        const { data, error } = await api
           .from('profiles')
           .select('id, full_name, phone_number, role')
           .eq('id', userId)
@@ -147,34 +119,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [userId]);
 
   const signIn: AuthContextValue['signIn'] = async (email, password) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await api.auth.signInWithPassword({ email, password });
     if (error) return { error: error.message };
-    const result = await supabase.from('profiles').select('role').eq('id', data.user.id).maybeSingle();
+    const result = await api.from('profiles').select('role').eq('id', data.user.id).maybeSingle();
     const role = (result.data as { role?: string } | null)?.role;
     if (result.error || (role !== 'tailor' && role !== 'admin')) {
-      await supabase.auth.signOut();
+      await api.auth.signOut();
       return { error: 'This account does not have staff access.' };
     }
     return { error: null };
   };
 
   const sendPasswordReset: AuthContextValue['sendPasswordReset'] = async (email) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    const { error } = await api.auth.resetPasswordForEmail(email, {
       redirectTo: window.location.origin,
     });
     return { error: error?.message || null };
   };
 
   const updatePassword: AuthContextValue['updatePassword'] = async (newPassword) => {
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    const { error } = await api.auth.updateUser({ password: newPassword });
     if (!error) setIsPasswordRecovery(false);
     return { error: error?.message || null };
   };
 
   const signOut = async () => {
+    await api.auth.signOut();
     setIsPasswordRecovery(false);
     clearOfflineStore();
-    await supabase.auth.signOut();
   };
 
   return (

@@ -1,5 +1,5 @@
 // Application shell only. Staff records and mutations never enter this cache.
-const CACHE_NAME='atelier-staff-workshop-v3';
+const CACHE_NAME='atelier-staff-workshop-v4';
 const SHELL=['/','/index.html','/favicon.svg','/manifest.json','/logo.png'];
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE_NAME).then(cache=>Promise.allSettled(SHELL.map(path=>cache.add(path)))));

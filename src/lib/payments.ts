@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { api } from './api';
 import type { PaymentEntry, BespokeJobOrder } from '../types/workshop.types';
 import { applyOrderRecord } from './orders';
 
@@ -15,7 +15,7 @@ export function paymentResult(order: BespokeJobOrder, data: any): BespokeJobOrde
 export async function recordPayment(order: BespokeJobOrder, input: {
   submissionKey: string; amount: number; method: string; date: string; reference: string; notes: string; allowCredit: boolean;
 }): Promise<BespokeJobOrder> {
-  const { data, error } = await (supabase as any).rpc('record_payment', {
+  const { data, error } = await (api as any).rpc('record_payment', {
     p_order_id: order.id, p_submission_key: input.submissionKey, p_amount: input.amount,
     p_method: input.method, p_occurred_on: input.date, p_reference: input.reference,
     p_notes: input.notes, p_allow_credit: input.allowCredit,
@@ -24,7 +24,7 @@ export async function recordPayment(order: BespokeJobOrder, input: {
   return paymentResult(order, data);
 }
 export async function reversePayment(order: BespokeJobOrder, paymentId: string, submissionKey: string, reason: string) {
-  const { data, error } = await (supabase as any).rpc('reverse_payment', {
+  const { data, error } = await (api as any).rpc('reverse_payment', {
     p_payment_id: paymentId, p_submission_key: submissionKey, p_reason: reason,
   });
   if (error) throw new Error(error.message || 'Could not confirm this correction. Refresh the ledger before trying again.');

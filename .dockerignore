@@ -1,0 +1,22 @@
+# Only the production build inputs enter Docker's context. Local credentials,
+# Git history, fixture servers, local data and installed dependencies stay out.
+**
+!package.json
+!package-lock.json
+!index.html
+!vite.config.ts
+!tsconfig.json
+!tsconfig.app.json
+!tsconfig.node.json
+!tailwind.config.js
+!postcss.config.js
+!src/
+!src/**
+!public/
+!public/**
+!server/
+!server/**
+server/tests/
+!supabase/
+!supabase/migrations/
+!supabase/migrations/**

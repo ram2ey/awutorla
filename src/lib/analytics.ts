@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { api } from './api';
 import type { BespokeJobOrder, WorkshopStage, PaymentEntry } from '../types/workshop.types';
 import { orderBalance, toPesewas } from './money';
 import { normalizeDueDate } from './dates';
@@ -75,7 +75,7 @@ export function ordersForView(orders: BespokeJobOrder[], view: OrderView, today 
  */
 export async function fetchNewClientsThisMonth(): Promise<number> {
   const startOfMonth = `${new Date().toISOString().slice(0, 7)}-01T00:00:00Z`;
-  const { count, error } = await supabase
+  const { count, error } = await api
     .from('clients')
     .select('id', { count: 'exact', head: true })
     .gte('created_at', startOfMonth);

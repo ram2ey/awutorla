@@ -3,7 +3,7 @@ import { Lock, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { CenteredCardShell } from '../ui/CenteredCardShell';
 
-// Shown when the user arrives via a Supabase password-reset email link
+// New/reset staff accounts must replace their temporary password before working.
 export const SetNewPasswordScreen: React.FC = () => {
   const { updatePassword, signOut } = useAuth();
   const [password, setPassword] = useState('');
@@ -16,8 +16,8 @@ export const SetNewPasswordScreen: React.FC = () => {
     e.preventDefault();
     setErrorMessage(null);
 
-    if (password.length < 6) {
-      setErrorMessage('Password must be at least 6 characters.');
+    if (password.length < 12) {
+      setErrorMessage('Password must be at least 12 characters.');
       return;
     }
     if (password !== confirmPassword) {
@@ -69,11 +69,13 @@ export const SetNewPasswordScreen: React.FC = () => {
               <input
                 type="password"
                 required
-                minLength={6}
+                minLength={12}
+                maxLength={256}
+                autoComplete="new-password"
                 autoFocus
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="At least 6 characters"
+                placeholder="At least 12 characters"
                 className="w-full bg-white/90 border border-gray-200/90 rounded-xl p-2.5 pl-10 text-xs sm:text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gold-500/30 focus:border-gold-500 shadow-sm transition-all"
               />
               <Lock size={14} className="absolute left-3 top-3 text-gold-700" />
@@ -86,7 +88,9 @@ export const SetNewPasswordScreen: React.FC = () => {
               <input
                 type="password"
                 required
-                minLength={6}
+                minLength={12}
+                maxLength={256}
+                autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Re-enter password"

@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { api } from './api';
 import type { MeasurementParameter } from '../types/workshop.types';
 
 function mapParameterRow(row: any): MeasurementParameter {
@@ -16,7 +16,7 @@ function mapParameterRow(row: any): MeasurementParameter {
  * bust, waist — plus anything an admin has added), ordered for display.
  */
 export async function fetchMeasurementParameters(includeInactive = false): Promise<MeasurementParameter[]> {
-  let query = supabase.from('measurement_parameters').select('*').order('display_order', { ascending: true });
+  let query = api.from('measurement_parameters').select('*').order('display_order', { ascending: true });
   if (!includeInactive) query = query.eq('is_active', true);
   const { data, error } = await query;
   if (error) throw error;
@@ -40,7 +40,7 @@ export async function createMeasurementParameter(label: string, displayOrder: nu
   const key = slugify(label);
   if (!key) throw new Error('Enter a parameter name.');
 
-  const { data, error } = await (supabase.from('measurement_parameters') as any)
+  const { data, error } = await (api.from('measurement_parameters') as any)
     .insert({ key, label: label.trim(), display_order: displayOrder })
     .select()
     .single();
@@ -53,14 +53,14 @@ export async function createMeasurementParameter(label: string, displayOrder: nu
  * clients are preserved rather than orphaned.
  */
 export async function setMeasurementParameterActive(id: string, isActive: boolean): Promise<void> {
-  const { error } = await (supabase.from('measurement_parameters') as any)
+  const { error } = await (api.from('measurement_parameters') as any)
     .update({ is_active: isActive })
     .eq('id', id);
   if (error) throw error;
 }
 
 export async function reorderMeasurementParameter(id: string, displayOrder: number): Promise<void> {
-  const { error } = await (supabase.from('measurement_parameters') as any)
+  const { error } = await (api.from('measurement_parameters') as any)
     .update({ display_order: displayOrder })
     .eq('id', id);
   if (error) throw error;
@@ -74,7 +74,7 @@ export async function updateMeasurementParameterLabel(id: string, label: string)
   const trimmed = label.trim();
   if (!trimmed) throw new Error('Enter a parameter name.');
 
-  const { error } = await (supabase.from('measurement_parameters') as any)
+  const { error } = await (api.from('measurement_parameters') as any)
     .update({ label: trimmed })
     .eq('id', id);
   if (error) throw error;

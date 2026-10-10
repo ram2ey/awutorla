@@ -365,13 +365,17 @@ CREATE POLICY "Only admins can delete tasks"
 -- Lets every signed-in tailor/admin's Workshop board update live when any
 -- device creates/updates an order or task, instead of only on next page load.
 DO $$ BEGIN
-    ALTER PUBLICATION supabase_realtime ADD TABLE public.orders;
+    IF EXISTS (SELECT FROM pg_publication WHERE pubname='supabase_realtime') THEN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.orders;
+    END IF;
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
 DO $$ BEGIN
-    ALTER PUBLICATION supabase_realtime ADD TABLE public.order_tasks;
+    IF EXISTS (SELECT FROM pg_publication WHERE pubname='supabase_realtime') THEN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.order_tasks;
+    END IF;
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;

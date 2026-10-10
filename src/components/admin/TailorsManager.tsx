@@ -11,7 +11,7 @@ import {
   CheckCircle2,
   Copy,
 } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { api } from '../../lib/api';
 import { useAuth, createStaffAccount } from '../../lib/auth';
 import type { UserRole } from '../../types/database.types';
 
@@ -40,6 +40,7 @@ export const TailorsManager: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [resetAccount, setResetAccount] = useState<{id:string;name:string;password?:string} | null>(null);
 
   const [isAddFormOpen, setIsAddFormOpen] = useState(false);
   const [newFullName, setNewFullName] = useState('');
@@ -53,7 +54,7 @@ export const TailorsManager: React.FC = () => {
   useEffect(() => {
     let isMounted = true;
     async function load() {
-      const { data, error } = await supabase
+      const { data, error } = await api
         .from('profiles')
         .select('id, full_name, phone_number, role')
         .in('role', ['tailor', 'admin'])
@@ -78,7 +79,7 @@ export const TailorsManager: React.FC = () => {
     const previous = profiles;
     setProfiles((prev) => prev.map((p) => (p.id === profileId ? { ...p, role } : p)));
 
-    const { error } = await (supabase.from('profiles') as any).update({ role }).eq('id', profileId);
+    const { error } = await (api.from('profiles') as any).update({ role }).eq('id', profileId);
     if (error) {
       setErrorMessage(`Could not update role: ${error.message}`);
       setProfiles(previous);
@@ -93,6 +94,16 @@ export const TailorsManager: React.FC = () => {
     setNewRole('tailor');
     setCreateError(null);
     setCreatedAccount(null);
+  };
+
+  const handleResetPassword = async () => {
+    if (!resetAccount) return;
+    setSavingId(resetAccount.id);
+    setErrorMessage(null);
+    const {data,error}=await api.functions.invoke('reset-staff-password',{body:{userId:resetAccount.id}});
+    if(error)setErrorMessage(error.message);
+    else setResetAccount({...resetAccount,password:data.tempPassword});
+    setSavingId(null);
   };
 
   const handleCreateStaff = async (e: React.FormEvent) => {
@@ -114,7 +125,7 @@ export const TailorsManager: React.FC = () => {
       });
 
       // Reload the team list so the newly created user appears immediately
-      const { data } = await supabase
+      const { data } = await api
         .from('profiles')
         .select('id, full_name, phone_number, role')
         .in('role', ['tailor', 'admin'])
@@ -132,7 +143,7 @@ export const TailorsManager: React.FC = () => {
     <div className="space-y-6 animate-in fade-in">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <p className="text-xs text-gray-500 font-sans">
-          Manage roles across clients and atelier staff. Tailors access digital job cards; Admins manage workshop settings.
+          Manage atelier staff roles and passwords. Tailors access job cards; admins manage workshop settings.
         </p>
 
         {!isAddFormOpen && (
@@ -156,6 +167,16 @@ export const TailorsManager: React.FC = () => {
           <span>{errorMessage}</span>
         </div>
       )}
+
+      {resetAccount && <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-3 text-sm">
+        {resetAccount.password ? <>
+          <p>Share this temporary password with {resetAccount.name}. They must choose a new password after signing in.</p>
+          <div className="flex items-center gap-3"><code className="break-all">{resetAccount.password}</code>
+            <button type="button" onClick={()=>navigator.clipboard?.writeText(resetAccount.password!)} aria-label="Copy temporary password"><Copy size={16}/></button></div>
+        </> : <><p>Reset {resetAccount.name}'s password? This signs them out on all devices.</p>
+          <button type="button" disabled={savingId===resetAccount.id} onClick={handleResetPassword} className="px-3 py-2 bg-charcoal-950 text-white rounded-lg disabled:opacity-50">Confirm password reset</button></>}
+        <button type="button" onClick={()=>setResetAccount(null)} className="block text-xs underline">{resetAccount.password?'Done':'Cancel'}</button>
+      </div>}
 
       {/* Add Staff Account Form or Temporary Password Screen */}
       {isAddFormOpen && (
@@ -352,6 +373,8 @@ export const TailorsManager: React.FC = () => {
                   <div className="text-gray-500 text-xs font-mono mt-0.5">{p.phone_number || 'No phone on file'}</div>
                 </div>
 
+                <button type="button" disabled={isSelf || savingId===p.id} onClick={()=>setResetAccount({id:p.id,name:p.full_name || 'this staff member'})}
+                  className="text-xs underline disabled:opacity-40">Reset password</button>
                 <div className="flex bg-gray-100/90 rounded-xl p-1 border border-gray-200/60">
                   {ROLE_OPTIONS.map((opt) => (
                     <button
