@@ -4,6 +4,7 @@ import pg from 'pg';
 import { migrate } from './migrate.mjs';
 import { bootstrapAdmin } from './accounts.mjs';
 import { createHandler } from './app.mjs';
+import { expireShopOrders } from './shop.mjs';
 
 // Keep calendar dates independent of the server's timezone and API timestamps.
 pg.types.setTypeParser(1082,value=>value);
@@ -22,10 +23,14 @@ const server=http.createServer(handler);
 server.requestTimeout=30000;
 server.headersTimeout=15000;
 server.listen(port,'0.0.0.0',()=>console.log(`Awutorla is listening on port ${port}.`));
+await expireShopOrders(pool);
+const shopCleanup=setInterval(()=>expireShopOrders(pool).catch(()=>console.error('Shop reservation maintenance failed.')),60000);
+shopCleanup.unref();
 const cleanup=setInterval(()=>pool.query("DELETE FROM auth.sessions WHERE expires_at<now(); DELETE FROM auth.login_limits WHERE started_at<now()-interval '1 day'").catch(()=>console.error('Session maintenance failed.')),60*60*1000);
 cleanup.unref();
 for(const signal of ['SIGTERM','SIGINT']) process.on(signal,()=>{
   clearInterval(cleanup);
+  clearInterval(shopCleanup);
   server.close(async()=>{await pool.end();process.exit(0);});
   setTimeout(()=>process.exit(1),10000).unref();
 });

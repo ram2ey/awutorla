@@ -1,8 +1,9 @@
 # Awutorla
 
-Staff-only management for a Ghanaian bespoke tailoring workshop. Customers are
-independent records, not login accounts. Progress SMS and payments are recorded
-manually. No Hubtel account or SMS provider credentials are required.
+Public ready-to-wear shop and staff management for a Ghanaian tailoring atelier.
+Customers order as guests; workshop customers remain independent records, not
+login accounts. Payments and progress messages are handled manually. No payment
+gateway, Hubtel account or SMS provider credentials are required.
 
 React + TypeScript + Vite + Tailwind, with a Node.js API, ordinary PostgreSQL,
 staff session cookies and private uploads. Deploy on Hetzner using Coolify.
@@ -23,11 +24,17 @@ npm run lint
 npm run build
 ```
 
-Only tailors and admins can sign in. Admins create staff accounts in Settings →
+The public shop is at `/`; staff sign in at `/staff`. Only tailors and admins can
+sign in. Admins create staff accounts in Settings →
 Tailors & Team. Register customers through New Intake, using their Ghanaian phone
 number. Staff manage orders and master measurements from Clients or the dashboard.
 
 ## Manual workshop workflow
+
+Ready-to-wear orders have their own Dashboard → Shop Orders view and admin controls
+in Settings → Ready-to-wear Shop. Checkout starts disabled. Follow
+[the shop launch and operations guide](docs/SHOP.md) to configure merchandise,
+stock, contact/payment details, and the required test order before opening it.
 
 - **Progress SMS:** advance through Received → Cutting → Fitting → Finishing →
   Ready → Delivered. Each change saves its history and an SMS record together.
@@ -81,7 +88,7 @@ number. Staff manage orders and master measurements from Clients or the dashboar
 ## Migration and deployment
 
 For a new database, the backend creates native support schemas and applies
-migrations 01–08 automatically. It records checksums and never reapplies them on
+migrations 01–09 automatically. It records checksums and never reapplies them on
 restart. Historical migrations are not a reset script. Existing workshop tables
 without native migration history need a reviewed data import. Back up before
 schema changes and review the preservation notes below.
@@ -144,7 +151,9 @@ Docker is required for the full container check; follow [docs/COOLIFY.md](docs/C
 
 For UI development without a PostgreSQL installation, run
 `node scripts/preview-postgres-ui.mjs` and `npm run dev` in separate terminals.
-Open `http://localhost:5173` and use the fake login printed by the fixture server.
+Open `http://localhost:5173` for the fake shop, or `/staff` and use the fake login
+printed by the fixture server. Checkout starts disabled; the fixture includes demo
+products only, never production merchandise or real payment instructions.
 It uses an isolated in-memory PostgreSQL database, never your `DATABASE_URL`, and
 is excluded from the production image. Stop it before starting the real backend.
 

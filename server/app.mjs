@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { hashPassword, checkPassword, newToken, tokenHash, normalizeEmail, safeFilePath, imageType } from './security.mjs';
 import { createAccount, resetAccount } from './accounts.mjs';
 import { staffTransaction, tableQuery, rpcQuery } from './data.mjs';
+import { createShopHandler } from './shop.mjs';
 
 const compress=promisify(gzip);
 const maxUpload=10*1024*1024;
@@ -75,6 +76,7 @@ export async function createHandler({pool,appOrigin,production=true,uploadDir='.
     cookie(res,token);
     json(res,200,{data:sessionData(user),error:null});
   }
+  const shopHandler=createShopHandler({pool,uploadDir,production,currentUser,json,jsonBody,body});
   return async function handler(req,res) {
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('X-Frame-Options','DENY');
@@ -90,6 +92,7 @@ export async function createHandler({pool,appOrigin,production=true,uploadDir='.
         res.setHeader('Cache-Control','no-store');
         if (!['GET','POST','DELETE'].includes(req.method)) throw new HttpError(405,'Method not allowed.');
         if (req.method!=='GET' && req.headers.origin!==origin) throw new HttpError(403,'Request origin is not allowed.');
+        if (path.startsWith('/api/shop/')) return await shopHandler(req,res,url);
         if (path==='/api/auth/sign-in' && req.method==='POST') return await signIn(req,res);
         if (path==='/api/auth/sign-out' && req.method==='POST') {
           // Logout is idempotent, including an expired or revoked session.

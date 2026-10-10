@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 export const migrations = ['01_schema.sql','02_measurement_parameters.sql','03_storage_buckets.sql',
   '04_security_hardening.sql','05_staff_only_sms.sql','06_manual_workshop.sql',
-  '07_workshop_operations.sql','08_reports_and_recovery.sql'];
+  '07_workshop_operations.sql','08_reports_and_recovery.sql','09_ready_to_wear.sql'];
 
 export async function migrate(db) {
   // One connection owns this session lock until every migration has finished.

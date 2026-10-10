@@ -19,7 +19,8 @@
     "test:sms": "tsx scripts/run-manual-workflow-tests.ts",
     "test:database": "tsx scripts/run-database-tests.ts",
     "test:container": "node scripts/smoke-container.mjs",
-    "test:backend": "node --test server/tests/backend.test.mjs"
+    "test:backend": "node --test server/tests/backend.test.mjs server/tests/shop.test.mjs",
+    "test:shop": "node --test server/tests/shop.test.mjs"
   },
   "dependencies": {
     "jspdf": "^4.2.1",

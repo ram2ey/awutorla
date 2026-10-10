@@ -1,5 +1,5 @@
 // Application shell only. Staff records and mutations never enter this cache.
-const CACHE_NAME='atelier-staff-workshop-v4';
+const CACHE_NAME='atelier-staff-workshop-v5';
 const SHELL=['/','/index.html','/favicon.svg','/manifest.json','/logo.png'];
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE_NAME).then(cache=>Promise.allSettled(SHELL.map(path=>cache.add(path)))));
@@ -12,6 +12,8 @@ self.addEventListener('fetch',event=>{
   const url=new URL(event.request.url);
   if(event.request.method!=='GET' || url.origin!==self.location.origin)return;
   const navigation=event.request.mode==='navigate';
+  // Guest checkout and private order-status pages must always use the network.
+  if(navigation && !/^\/(staff|workshop)(\/|$)/.test(url.pathname))return;
   if(!navigation && !url.pathname.startsWith('/assets/') && !SHELL.includes(url.pathname))return;
   async function network(){
     const response=await fetch(event.request);

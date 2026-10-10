@@ -13,7 +13,7 @@ volume. Keep access private; do not publish port 5432. Copy the **internal
 connection URL**. Coolify's default PostgreSQL administrator has the extension,
 schema and role creation privileges needed for first startup.
 
-The backend creates native support schemas and applies workshop SQL 01–08. It
+The backend creates native support schemas and applies workshop/shop SQL 01–09. It
 records checksums and takes a database lock; restarts skip applied migrations.
 Changed historical migrations stop startup. Add/register a new migration for
 future schema changes. API queries run under the restricted `authenticated`
@@ -71,6 +71,12 @@ Relevant official guides: [Dockerfile setup](https://coolify.io/docs/application
 [health checks](https://coolify.io/docs/applications/configuration/health-checks).
 
 ## Domain and first login
+
+The public homepage now serves the ready-to-wear shop; staff sign in at `/staff`.
+Back up the database and upload volume before upgrading. Checkout stays disabled
+until an admin configures the shop and completes a test order; follow
+[the shop launch guide](SHOP.md). Product photos use the same persistent upload
+volume under `shop-products`, separately from private workshop attachments.
 
 Point the domain's A record at the Hetzner public IPv4 address. Add AAAA only if
 the server serves the domain over IPv6. Allow public 80/443 for proxy traffic and

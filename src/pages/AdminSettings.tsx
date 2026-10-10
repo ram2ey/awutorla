@@ -5,10 +5,12 @@ import { MeasurementParametersEditor } from '../components/admin/MeasurementPara
 import { BusinessSettingsEditor } from '../components/admin/BusinessSettingsEditor';
 import { activeTabClass, inactiveTabClass } from '../components/ui/tabStyles';
 import { AbandonedUploads } from '../components/admin/AbandonedUploads';
+import { ShopAdmin } from '../components/shop/ShopAdmin';
 
-type SettingsSection = 'tailors' | 'measurements' | 'business' | 'uploads';
+type SettingsSection = 'tailors' | 'measurements' | 'business' | 'uploads' | 'shop';
 
 const SECTIONS: { id: SettingsSection; label: string; icon: React.ReactNode; description: string }[] = [
+  {id:'shop',label:'Ready-to-wear Shop',icon:<Store size={15}/>,description:'Manage products, stock, pickup and payment details, and customer checkout.'},
   {id:'uploads',label:'Unused Uploads',icon:<Store size={15}/>,description:'Review abandoned intake attachments without removing saved order files.'},
   { id: 'tailors', label: 'Tailors & Team', icon: <Users size={15} />, description: 'Manage staff accounts, artisan credentials, and role privileges.' },
   {
@@ -58,6 +60,7 @@ export const AdminSettings: React.FC = () => {
       <div className="glass p-6 sm:p-8 rounded-3xl border border-gray-200/60 shadow-luxury space-y-2">
         <h3 className="text-xl sm:text-2xl font-bold text-charcoal-950 font-display">{current.label}</h3>
         <p className="text-xs text-gray-500 mb-6 font-sans">{current.description}</p>
+        {activeSection === 'shop' && <ShopAdmin />}
 
         <div className="pt-2">
           {activeSection === 'tailors' && <TailorsManager />}

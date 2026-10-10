@@ -51,7 +51,7 @@ after(async()=>{
 });
 
 test('Native migrations are tracked, repeat safely and detect changed applied SQL',async()=>{
-  assert.equal(Number((await query('SELECT count(*) FROM public.atelier_migrations')).rows[0].count),8);
+  assert.equal(Number((await query('SELECT count(*) FROM public.atelier_migrations')).rows[0].count),9);
   await migrate({query});
   await query("UPDATE public.atelier_migrations SET checksum='changed' WHERE name='08_reports_and_recovery.sql'");
   await assert.rejects(migrate({query}),/Applied migration changed/);

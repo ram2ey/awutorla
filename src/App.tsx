@@ -13,7 +13,7 @@ import { SetNewPasswordScreen } from './components/auth/SetNewPasswordScreen';
 import { useAuth } from './lib/auth';
 import { fetchAppSettings, DEFAULT_APP_SETTINGS } from './lib/settings';
 import { OfflineWorkspace } from './components/workshop/OfflineWorkspace';
-const StaffDashboard=lazy(()=>import('./pages/StaffDashboard'));
+const StaffDashboard=lazy(()=>import('./components/shop/ShopDashboard'));
 const Clients=lazy(()=>import('./pages/Clients'));
 const AdminSettings=lazy(()=>import('./pages/AdminSettings'));
 const QuickIntakeModal=lazy(()=>import('./components/workshop/QuickIntakeModal'));
@@ -102,6 +102,7 @@ function App() {
 
             {/* Quick Actions */}
             <div className="flex flex-wrap items-center gap-2.5 justify-center order-2 lg:order-3">
+              <a href="/" className="text-xs underline px-2 py-2">View shop</a>
 
               {/* Quick Intake Button (Tailor/Admin) — gated on the real account role */}
               {isStaff && (
