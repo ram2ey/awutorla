@@ -85,7 +85,7 @@ function App() {
   if (isPasswordRecovery) return <SetNewPasswordScreen />;
 
   return (
-    <div className="min-h-screen bg-gray-100 text-gray-900 font-sans p-3 sm:p-6 lg:p-8 relative overflow-x-hidden">
+    <div className="min-h-screen bg-gray-100 text-gray-900 font-sans p-3 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:p-6 lg:p-8 relative overflow-x-hidden">
       <div className="max-w-7xl mx-auto rounded-3xl shadow-mega-card bg-cream-100 overflow-hidden">
 
         {/* Brand Header */}
