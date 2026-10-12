@@ -9,16 +9,68 @@ const button = 'rounded-xl bg-charcoal-950 text-white px-5 py-2.5 text-sm font-s
 const blankVariant = (): ShopVariant => ({ id: crypto.randomUUID(), sku: '', size: '', colour: '', stock: 0, available: 0, active: true });
 const blankProduct = (): ShopProduct => ({ id: '', title: '', slug: '', description: '', category: '', size_guide: '', price_pesewas: 0, published: false, version: 0, images: [], variants: [blankVariant()] });
 
+type PendingPhoto = { id: string; file: File; alt: string };
+
+function PhotoPreview({ photo }: { photo: PendingPhoto }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    const preview = URL.createObjectURL(photo.file);
+    setUrl(preview);
+    return () => URL.revokeObjectURL(preview);
+  }, [photo.file]);
+  return url ? <img src={url} alt={photo.alt || photo.file.name} className="w-24 h-32 object-cover rounded-xl" /> : null;
+}
+
 export function ShopAdmin() {
   const [settings, setSettings] = useState<ShopSettings | null>(null); const [products, setProducts] = useState<ShopProduct[]>([]); const [draft, setDraft] = useState<ShopProduct | null>(null);
   const [price, setPrice] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [notice, setNotice] = useState(''); const [alt, setAlt] = useState('');
+  const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
   async function load() { const [s, p] = await Promise.all([shopRequest<ShopSettings>('admin/settings'), shopRequest<ShopProduct[]>('admin/products')]); setSettings(s); setProducts(p); }
   useEffect(() => { let alive = true; Promise.all([shopRequest<ShopSettings>('admin/settings'), shopRequest<ShopProduct[]>('admin/products')]).then(([s, p]) => { if (alive) { setSettings(s); setProducts(p); } }).catch(err => { if (alive) setError(err.message); }); return () => { alive = false; }; }, []);
-  function edit(p: ShopProduct) { setDraft(structuredClone(p)); setPrice(p.price_pesewas ? String(p.price_pesewas / 100) : ''); setAlt(''); setNotice(''); setError(''); }
+  function edit(p: ShopProduct) { setDraft(structuredClone(p)); setPendingPhotos([]); setPrice(p.price_pesewas ? String(p.price_pesewas / 100) : ''); setAlt(''); setNotice(''); setError(''); }
   async function saveSettings(event: FormEvent) { event.preventDefault(); if (!settings) return; setBusy(true); setError(''); setNotice(''); try { await shopPost('admin/settings', settings); await load(); setNotice('Shop settings saved.'); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } }
-  async function saveProduct(event: FormEvent) { event.preventDefault(); if (!draft) return; setBusy(true); setError(''); setNotice(''); try { const saved = await shopPost<ShopProduct>('admin/products', { ...draft, id: draft.id || undefined, price_pesewas: Math.round(Number(price) * 100) }); setDraft(saved); setProducts(await shopRequest<ShopProduct[]>('admin/products')); setNotice('Product saved.'); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } }
-  async function upload(file?: File) { if (!file || !draft?.id) return; setBusy(true); setError(''); setNotice(''); try { const saved = await shopRequest<ShopProduct>(`admin/products/${draft.id}/images?alt=${encodeURIComponent(alt)}`, { method: 'POST', body: file }); setDraft(saved); setPrice(String(saved.price_pesewas / 100)); setProducts(await shopRequest<ShopProduct[]>('admin/products')); setNotice('Photo uploaded.'); setAlt(''); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } }
-  async function removeImage(id: string) { if (!draft) return; setBusy(true); setError(''); try { await shopRequest(`admin/images/${id}`, { method: 'DELETE' }); const p = await shopRequest<ShopProduct[]>('admin/products'); setProducts(p); setDraft(p.find(product => product.id === draft.id) || null); setNotice('Photo removed.'); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } }
+  function updateSavedProduct(saved: ShopProduct, published = saved.published) {
+    setDraft({ ...saved, published });
+    setProducts(current => [saved, ...current.filter(product => product.id !== saved.id)]);
+  }
+  async function saveProduct(event: FormEvent) {
+    event.preventDefault();
+    if (!draft) return;
+    setBusy(true); setError(''); setNotice('');
+    let productSaved = false;
+    try {
+      // A new listing gets its ID first; publishing waits until its photos exist.
+      const deferPublish = draft.published && pendingPhotos.length > 0 && !products.find(product => product.id === draft.id)?.published;
+      let saved = await shopPost<ShopProduct>('admin/products', { ...draft, id: draft.id || undefined, published: deferPublish ? false : draft.published, price_pesewas: Math.round(Number(price) * 100) });
+      productSaved = true;
+      updateSavedProduct(saved, draft.published);
+      for (const photo of pendingPhotos) {
+        setNotice(`Uploading ${photo.file.name}…`);
+        saved = await shopRequest<ShopProduct>(`admin/products/${saved.id}/images?alt=${encodeURIComponent(photo.alt)}`, { method: 'POST', body: photo.file });
+        updateSavedProduct(saved, draft.published);
+        setPendingPhotos(current => current.filter(item => item.id !== photo.id));
+      }
+      if (deferPublish) {
+        saved = await shopPost<ShopProduct>('admin/products', { ...saved, published: true });
+        updateSavedProduct(saved);
+      }
+      setNotice('Product saved.');
+    } catch (err) {
+      setNotice('');
+      setError(`${productSaved ? 'The listing was saved, but could not finish saving photos or publishing. Remaining photos are still selected; click Save product to retry. ' : ''}${(err as Error).message}`);
+    } finally { setBusy(false); }
+  }
+  function selectPhotos(files: FileList | null) {
+    if (!draft || !files?.length) return;
+    const selected = Array.from(files);
+    setError(''); setNotice('');
+    if (draft.images.length + pendingPhotos.length + selected.length > 8) { setError('Use up to eight photos per product.'); return; }
+    if (selected.some(file => !['image/png', 'image/jpeg', 'image/webp'].includes(file.type))) { setError('Use PNG, JPEG or WebP product photos.'); return; }
+    if (selected.some(file => file.size > 10 * 1024 * 1024)) { setError('Each product photo must be 10 MB or smaller.'); return; }
+    setPendingPhotos(current => [...current, ...selected.map(file => ({ id: crypto.randomUUID(), file, alt }))]);
+    setAlt('');
+  }
+  async function removeImage(id: string) { if (!draft) return; setBusy(true); setError(''); try { await shopRequest(`admin/images/${id}`, { method: 'DELETE' }); const p = await shopRequest<ShopProduct[]>('admin/products'); setProducts(p); const saved = p.find(product => product.id === draft.id); if (saved) setDraft({ ...draft, images: saved.images, version: saved.version }); setNotice('Photo removed.'); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } }
   function changeVariant(index: number, values: Partial<ShopVariant>) { if (!draft) return; setDraft({ ...draft, variants: draft.variants.map((v, i) => i === index ? { ...v, ...values } : v) }); }
   return <div className="space-y-8">
     <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-gray-500">Manage the public collection and shop launch.</p><div className="flex gap-3"><a href="/" target="_blank" rel="noreferrer" className="text-sm underline">View shop</a><button disabled={busy} className="text-sm underline" onClick={() => { void load().then(() => { setError(''); setNotice('Reloaded saved shop data.'); }).catch(err => setError(err.message)); }}>Reload saved data</button></div></div>
@@ -31,10 +83,20 @@ export function ShopAdmin() {
       <div className="grid sm:grid-cols-2 gap-3">{products.map(p => <button disabled={busy} key={p.id} className={`text-left border rounded-xl p-4 bg-white ${draft?.id === p.id ? 'border-mustard-500' : ''}`} onClick={() => edit(p)}><span className="font-semibold text-sm">{p.title}</span><span className="block text-xs text-gray-500 mt-2">{shopMoney(p.price_pesewas)} · {p.published ? 'Published' : 'Draft'} · {p.variants.filter(v => v.active).reduce((s, v) => s + Number(v.available), 0)} available</span></button>)}</div>
     </section>
     {draft && <div className="glass rounded-2xl p-5 sm:p-6 space-y-6"><form onSubmit={saveProduct} className="space-y-4"><h3 className="text-xl">{draft.id ? 'Edit product' : 'New product draft'}</h3><div className="grid sm:grid-cols-2 gap-4"><label className="text-sm">Title<input required maxLength={160} className={input} value={draft.title} disabled={busy} onChange={e => setDraft({ ...draft, title: e.target.value })} /></label><label className="text-sm">URL name<input required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxLength={100} placeholder="linen-wrap-dress" className={input} value={draft.slug} disabled={busy} onChange={e => setDraft({ ...draft, slug: e.target.value })} /></label><label className="text-sm">Category<input maxLength={100} className={input} value={draft.category} disabled={busy} onChange={e => setDraft({ ...draft, category: e.target.value })} /></label><label className="text-sm">Price (GHS)<input required type="number" min="0.01" max="1000000" step="0.01" className={input} value={price} disabled={busy} onChange={e => setPrice(e.target.value)} /></label></div><label className="block text-sm">Description<textarea rows={4} maxLength={5000} className={input} value={draft.description} disabled={busy} onChange={e => setDraft({ ...draft, description: e.target.value })} /></label><label className="block text-sm">Size guide<textarea rows={4} maxLength={3000} placeholder="Measurements and fit for each size, with units." className={input} value={draft.size_guide} disabled={busy} onChange={e => setDraft({ ...draft, size_guide: e.target.value })} /></label>
+      <section className="border-y py-5 space-y-4" aria-labelledby="product-photos-heading">
+        <h4 id="product-photos-heading" className="font-semibold text-base">Product photographs</h4>
+        <p className="text-sm text-gray-500">Choose photos while creating your listing. They will upload when you click Save product.</p>
+        <div className="flex flex-wrap gap-3">
+          {draft.images.map(image => <div key={image.id} className="w-24"><img src={shopImage(image.id, true)} alt={image.alt || draft.title} className="w-24 h-32 object-cover rounded-xl" /><button type="button" disabled={busy} aria-label="Remove photo" onClick={() => void removeImage(image.id)} className="mt-2 text-xs text-rose-700 inline-flex items-center gap-1"><Trash2 size={12} /> Remove</button></div>)}
+          {pendingPhotos.map(photo => <div key={photo.id} className="w-24"><PhotoPreview photo={photo} /><p className="mt-1 text-xs break-words">{photo.file.name}</p><p className="text-xs text-gray-500">Selected · not saved</p><button type="button" disabled={busy} aria-label={`Remove selected photo ${photo.file.name}`} onClick={() => setPendingPhotos(current => current.filter(item => item.id !== photo.id))} className="mt-2 text-xs text-rose-700 inline-flex items-center gap-1"><Trash2 size={12} /> Remove</button></div>)}
+        </div>
+        <label className="block text-sm">Photo description<input maxLength={200} value={alt} onChange={e => setAlt(e.target.value)} disabled={busy} className={input} placeholder="Describe the next photos you select" /></label>
+        <label className="inline-flex flex-wrap items-center gap-2 rounded-xl border bg-white px-4 py-3 text-sm"><Upload size={15} /> Choose photos<input aria-label="Upload product photo" type="file" accept="image/png,image/jpeg,image/webp" multiple disabled={busy || draft.images.length + pendingPhotos.length >= 8} className="max-w-48 text-xs" onChange={e => { selectPhotos(e.target.files); e.target.value = ''; }} /></label>
+        <p className="text-xs text-gray-500">PNG, JPEG or WebP. Up to 8 photos, 10 MB each.</p>
+      </section>
       <h4 className="text-base font-semibold pt-3">Sizes, colours and stock</h4><p className="text-xs text-gray-500">Stock is the physical quantity on hand, including items reserved by orders. Available stock excludes active reservations. Preserve existing variants for their order history.</p>
       <div className="space-y-3">{draft.variants.map((v, i) => <div key={v.id} className="border rounded-xl p-4"><div className="grid grid-cols-2 sm:grid-cols-4 gap-3"><label className="text-xs">SKU<input required maxLength={100} className={input} value={v.sku} disabled={busy} onChange={e => changeVariant(i, { sku: e.target.value })} /></label><label className="text-xs">Size<input required maxLength={60} className={input} value={v.size} disabled={busy} onChange={e => changeVariant(i, { size: e.target.value })} /></label><label className="text-xs">Colour<input required maxLength={60} className={input} value={v.colour} disabled={busy} onChange={e => changeVariant(i, { colour: e.target.value })} /></label><label className="text-xs">On hand<input required type="number" min={0} max={1000000} className={input} value={v.stock} disabled={busy} onChange={e => changeVariant(i, { stock: Number(e.target.value) })} /></label></div><div className="flex flex-wrap gap-4 mt-3 text-xs"><label className="flex gap-2"><input type="checkbox" checked={v.active} onChange={e => changeVariant(i, { active: e.target.checked })} disabled={busy} /> Active option</label><span>Saved availability: {v.available}</span></div></div>)}</div>
       <button type="button" disabled={busy || draft.variants.length >= 100} className="border rounded-xl px-4 py-2 text-sm" onClick={() => setDraft({ ...draft, variants: [...draft.variants, blankVariant()] })}>Add size / colour option</button><label className="flex gap-2 text-sm"><input type="checkbox" checked={draft.published} onChange={e => setDraft({ ...draft, published: e.target.checked })} disabled={busy} /> Publish in the collection</label><div className="flex gap-3"><button className={button} disabled={busy}>Save product</button><button type="button" disabled={busy} className="border px-4 py-2 rounded-xl text-sm" onClick={() => setDraft(null)}>Close editor</button></div></form>
-      <section className="border-t pt-5 space-y-4"><h4 className="font-semibold text-base">Product photographs</h4>{!draft.id ? <p className="text-xs text-gray-500">Save the draft before uploading photos.</p> : <><div className="flex flex-wrap gap-3">{draft.images.map(image => <div key={image.id} className="w-24"><img src={shopImage(image.id, true)} alt={image.alt || draft.title} className="w-24 h-32 object-cover rounded-xl" /><button disabled={busy} aria-label="Remove photo" onClick={() => void removeImage(image.id)} className="mt-2 text-xs text-rose-700 inline-flex items-center gap-1"><Trash2 size={12} /> Remove</button></div>)}</div><label className="block text-sm">Photo description<input maxLength={200} value={alt} onChange={e => setAlt(e.target.value)} disabled={busy} className={input} placeholder="Describe the garment and view" /></label><label className="inline-flex flex-wrap items-center gap-2 rounded-xl border bg-white px-4 py-3 text-sm"><Upload size={15} /> Upload photo<input aria-label="Upload product photo" type="file" accept="image/png,image/jpeg,image/webp" disabled={busy || draft.images.length >= 8} className="max-w-48 text-xs" onChange={e => { void upload(e.target.files?.[0]); e.target.value = ''; }} /></label><p className="text-xs text-gray-500">PNG, JPEG or WebP. Up to 8 photos, 10 MB each. Save product edits before uploading; the editor reloads the saved product after an upload.</p></>}</section>
     </div>}
   </div>;
 }

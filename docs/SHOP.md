@@ -14,7 +14,11 @@ Settings → Ready-to-wear Shop. The three mobile staff navigation icons remain.
    name, and pickup address/hours. Delivery within Ghana uses a staff-agreed quote.
 3. Create products as drafts. Add title, URL name, description, category, GHS price,
    size guide and each size/colour/SKU combination. Enter physical on-hand stock.
-   Save, upload PNG/JPEG/WebP photographs, then publish. Stock already allocated to
+   Choose PNG/JPEG/WebP photographs in the listing form and preview them before
+   saving. Save product uploads the selected photos; select Publish in the
+   collection to publish after the uploads finish. If an upload fails, the listing
+   and completed uploads stay saved, and remaining photos stay selected for retry.
+   Stock already allocated to
    orders cannot be removed. Fulfilment makes stale inventory edits fail.
 4. Add a published piece to the bag. From Settings open **Admin test checkout**.
    Submit a test order and complete confirmation, a verified test receipt, Ready,
